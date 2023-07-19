@@ -11,7 +11,7 @@ pkg_check_modules(WAYLAND_SERVER REQUIRED IMPORTED_TARGET wayland-server)
 pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon)
 
 # Set source files
-set(SOURCE_FILES eshywm.cpp)
+set(SOURCE_FILES eshywm.cpp server.cpp window.cpp)
 list(TRANSFORM SOURCE_FILES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/source/)
 
 # Generate xdg-shell-protocol.h using wayland-scanner
