@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+#include <memory>
+
 #include <wayland-server-core.h>
 
 #define static
@@ -35,6 +37,9 @@ extern "C"
 #undef static
 
 #include <xkbcommon/xkbcommon.h>
+class eshywm_server;
+
+std::shared_ptr<eshywm_server> server = nullptr;
 
 /*For brevity's sake, struct members are annotated where they are used.*/
 enum eshywm_cursor_mode
@@ -44,8 +49,10 @@ enum eshywm_cursor_mode
 	eshywm_CURSOR_RESIZE,
 };
 
-struct eshywm_server
+class eshywm_server
 {
+public:
+
 	struct wl_display* wl_display;
 	struct wlr_backend* backend;
 	struct wlr_renderer* renderer;
@@ -54,7 +61,7 @@ struct eshywm_server
 
 	struct wlr_xdg_shell* xdg_shell;
 	struct wl_listener new_xdg_surface;
-	struct wl_list views;
+	struct wl_list windows;
 
 	struct wlr_cursor* cursor;
 	struct wlr_xcursor_manager* cursor_mgr;
@@ -70,7 +77,7 @@ struct eshywm_server
 	struct wl_listener request_set_selection;
 	struct wl_list keyboards;
 	enum eshywm_cursor_mode cursor_mode;
-	struct eshywm_view* grabbed_view;
+	class eshywm_window* grabbed_window;
 	double grab_x, grab_y;
 	struct wlr_box grab_geobox;
 	uint32_t resize_edges;
@@ -80,20 +87,24 @@ struct eshywm_server
 	struct wl_listener new_output;
 };
 
-struct eshywm_output
+class eshywm_output
 {
+public:
+
 	struct wl_list link;
-	struct eshywm_server* server;
+	class eshywm_server* server;
 	struct wlr_output* wlr_output;
 	struct wl_listener frame;
 	struct wl_listener request_state;
 	struct wl_listener destroy;
 };
 
-struct eshywm_view
+class eshywm_window
 {
+public:
+
 	struct wl_list link;
-	struct eshywm_server* server;
+	class eshywm_server* server;
 	struct wlr_xdg_toplevel* xdg_toplevel;
 	struct wlr_scene_tree* scene_tree;
 	struct wl_listener map;
@@ -105,10 +116,12 @@ struct eshywm_view
 	struct wl_listener request_fullscreen;
 };
 
-struct eshywm_keyboard
+class eshywm_keyboard
 {
+public:
+
 	struct wl_list link;
-	struct eshywm_server* server;
+	class eshywm_server* server;
 	struct wlr_keyboard* wlr_keyboard;
 
 	struct wl_listener modifiers;
@@ -116,14 +129,14 @@ struct eshywm_keyboard
 	struct wl_listener destroy;
 };
 
-static void focus_view(struct eshywm_view* view, struct wlr_surface* surface)
+static void focus_window(class eshywm_window* window, struct wlr_surface* surface)
 {
 	/*Note: this function only deals with keyboard focus.*/
-	if (view == NULL)
+	if (window == NULL)
 	{
 		return;
 	}
-	struct eshywm_server* server = view->server;
+	class eshywm_server* server = window->server;
 	struct wlr_seat* seat = server->seat;
 	struct wlr_surface* prev_surface = seat->keyboard_state.focused_surface;
 	if (prev_surface == surface)
@@ -144,12 +157,12 @@ static void focus_view(struct eshywm_view* view, struct wlr_surface* surface)
 		wlr_xdg_toplevel_set_activated(previous->toplevel, false);
 	}
 	struct wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat);
-	/*Move the view to the front*/
-	wlr_scene_node_raise_to_top(&view->scene_tree->node);
-	wl_list_remove(&view->link);
-	wl_list_insert(&server->views, &view->link);
+	/*Move the window to the front*/
+	wlr_scene_node_raise_to_top(&window->scene_tree->node);
+	wl_list_remove(&window->link);
+	wl_list_insert(&server->windows, &window->link);
 	/*Activate the new surface*/
-	wlr_xdg_toplevel_set_activated(view->xdg_toplevel, true);
+	wlr_xdg_toplevel_set_activated(window->xdg_toplevel, true);
 	/*
 	*  Tell the seat to have the keyboard enter this surface. wlroots will keep
 	*  track of this and automatically send key events to the appropriate
@@ -157,7 +170,7 @@ static void focus_view(struct eshywm_view* view, struct wlr_surface* surface)
 	*/
 	if (keyboard != NULL)
 	{
-		wlr_seat_keyboard_notify_enter(seat, view->xdg_toplevel->base->surface,
+		wlr_seat_keyboard_notify_enter(seat, window->xdg_toplevel->base->surface,
 									   keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
 	}
 }
@@ -167,7 +180,7 @@ static void keyboard_handle_modifiers(
 {
 	/*This event is raised when a modifier key, such as shift or alt, is
 	*  pressed. We simply communicate this to the client.*/
-	struct eshywm_keyboard* keyboard =
+	class eshywm_keyboard* keyboard =
 		wl_container_of(listener, keyboard, modifiers);
 	/*
 	*  A seat can only have one keyboard, but this is a limitation of the
@@ -181,7 +194,7 @@ static void keyboard_handle_modifiers(
 									   &keyboard->wlr_keyboard->modifiers);
 }
 
-static bool handle_keybinding(struct eshywm_server* server, xkb_keysym_t sym)
+static bool handle_keybinding(xkb_keysym_t sym)
 {
 	/*
 	*  Here we handle compositor keybindings. This is when the compositor is
@@ -197,13 +210,13 @@ static bool handle_keybinding(struct eshywm_server* server, xkb_keysym_t sym)
 		break;
 	case XKB_KEY_F1:
 	{
-		/*Cycle to the next view*/
-		if (wl_list_length(&server->views) < 2)
+		/*Cycle to the next window*/
+		if (wl_list_length(&server->windows) < 2)
 		{
 			break;
 		}
-		struct eshywm_view* next_view = (eshywm_view*)wl_container_of(server->views.prev, next_view, link);
-		focus_view(next_view, next_view->xdg_toplevel->base->surface);
+		class eshywm_window* next_window = (eshywm_window*)wl_container_of(server->windows.prev, next_window, link);
+		focus_window(next_window, next_window->xdg_toplevel->base->surface);
 		break;
 	}
 	default:
@@ -216,9 +229,9 @@ static void keyboard_handle_key(
 	struct wl_listener* listener, void* data)
 {
 	/*This event is raised when a key is pressed or released.*/
-	struct eshywm_keyboard* keyboard =
+	class eshywm_keyboard* keyboard =
 		wl_container_of(listener, keyboard, key);
-	struct eshywm_server* server = keyboard->server;
+	class eshywm_server* server = keyboard->server;
 	struct wlr_keyboard_key_event* event = (wlr_keyboard_key_event* )data;
 	struct wlr_seat* seat = server->seat;
 
@@ -238,7 +251,7 @@ static void keyboard_handle_key(
 		*  process it as a compositor keybinding.*/
 		for (int i = 0; i < nsyms; i++)
 		{
-			handled = handle_keybinding(server, syms[i]);
+			handled = handle_keybinding(syms[i]);
 		}
 	}
 
@@ -257,7 +270,7 @@ static void keyboard_handle_destroy(struct wl_listener* listener, void* data)
 	*  the destruction of the wlr_keyboard. It will no longer receive events
 	*  and should be destroyed.
 	*/
-	struct eshywm_keyboard* keyboard =
+	class eshywm_keyboard* keyboard =
 		wl_container_of(listener, keyboard, destroy);
 	wl_list_remove(&keyboard->modifiers.link);
 	wl_list_remove(&keyboard->key.link);
@@ -266,13 +279,13 @@ static void keyboard_handle_destroy(struct wl_listener* listener, void* data)
 	free(keyboard);
 }
 
-static void server_new_keyboard(struct eshywm_server* server,
+static void server_new_keyboard(
 								struct wlr_input_device* device)
 {
 	struct wlr_keyboard* wlr_keyboard = wlr_keyboard_from_input_device(device);
 
-	struct eshywm_keyboard* keyboard = new eshywm_keyboard;
-	keyboard->server = server;
+	class eshywm_keyboard* keyboard = new eshywm_keyboard;
+	keyboard->server = server.get();
 	keyboard->wlr_keyboard = wlr_keyboard;
 
 	/*We need to prepare an XKB keymap and assign it to the keyboard. This
@@ -300,7 +313,7 @@ static void server_new_keyboard(struct eshywm_server* server,
 	wl_list_insert(&server->keyboards, &keyboard->link);
 }
 
-static void server_new_pointer(struct eshywm_server* server,
+static void server_new_pointer(
 							   struct wlr_input_device* device)
 {
 	/*We don't do anything special with pointers. All of our pointer handling
@@ -314,16 +327,16 @@ static void server_new_input(struct wl_listener* listener, void* data)
 {
 	/*This event is raised by the backend when a new input device becomes
 	*  available.*/
-	struct eshywm_server* server =
+	class eshywm_server* server =
 		wl_container_of(listener, server, new_input);
 	struct wlr_input_device* device = (wlr_input_device*)data;
 	switch (device->type)
 	{
 	case WLR_INPUT_DEVICE_KEYBOARD:
-		server_new_keyboard(server, device);
+		server_new_keyboard(device);
 		break;
 	case WLR_INPUT_DEVICE_POINTER:
-		server_new_pointer(server, device);
+		server_new_pointer(device);
 		break;
 	default:
 		break;
@@ -341,7 +354,7 @@ static void server_new_input(struct wl_listener* listener, void* data)
 
 static void seat_request_cursor(struct wl_listener* listener, void* data)
 {
-	struct eshywm_server* server = wl_container_of(
+	class eshywm_server* server = wl_container_of(
 		listener, server, request_cursor);
 	/*This event is raised by the seat when a client provides a cursor image*/
 	struct wlr_seat_pointer_request_set_cursor_event* event = (wlr_seat_pointer_request_set_cursor_event*)data;
@@ -366,19 +379,17 @@ static void seat_request_set_selection(struct wl_listener* listener, void* data)
 	*  usually when the user copies something. wlroots allows compositors to
 	*  ignore such requests if they so choose, but in eshywm we always honor
 	*/
-	struct eshywm_server* server = wl_container_of(
+	class eshywm_server* server = wl_container_of(
 		listener, server, request_set_selection);
 	struct wlr_seat_request_set_selection_event* event = (wlr_seat_request_set_selection_event*)data;
 	wlr_seat_set_selection(server->seat, event->source, event->serial);
 }
 
-static struct eshywm_view* desktop_view_at(
-	struct eshywm_server* server, double lx, double ly,
-	struct wlr_surface* *surface, double* sx, double* sy)
+static class eshywm_window* desktop_window_at(double lx, double ly, struct wlr_surface* *surface, double* sx, double* sy)
 {
 	/*This returns the topmost node in the scene at the given layout coords.
 	*  we only care about surface nodes as we are specifically looking for a
-	*  surface in the surface tree of a eshywm_view.*/
+	*  surface in the surface tree of a eshywm_window.*/
 	struct wlr_scene_node* node = wlr_scene_node_at(
 		&server->scene->tree.node, lx, ly, sx, sy);
 	if (node == NULL || node->type != WLR_SCENE_NODE_BUFFER)
@@ -394,45 +405,45 @@ static struct eshywm_view* desktop_view_at(
 	}
 
 	*surface = scene_surface->surface;
-	/*Find the node corresponding to the eshywm_view at the root of this
+	/*Find the node corresponding to the eshywm_window at the root of this
 	*  surface tree, it is the only one for which we set the data field.*/
 	struct wlr_scene_tree* tree = node->parent;
 	while (tree != NULL && tree->node.data == NULL)
 	{
 		tree = tree->node.parent;
 	}
-	return (eshywm_view*)tree->node.data;
+	return (eshywm_window*)tree->node.data;
 }
 
-static void reset_cursor_mode(struct eshywm_server* server)
+static void reset_cursor_mode(class eshywm_server* server)
 {
 	/*Reset the cursor mode to passthrough.*/
 	server->cursor_mode = eshywm_CURSOR_PASSTHROUGH;
-	server->grabbed_view = NULL;
+	server->grabbed_window = NULL;
 }
 
-static void process_cursor_move(struct eshywm_server* server, uint32_t time)
+static void process_cursor_move(uint32_t time)
 {
-	/*Move the grabbed view to the new position.*/
-	struct eshywm_view* view = server->grabbed_view;
-	wlr_scene_node_set_position(&view->scene_tree->node,
+	/*Move the grabbed window to the new position.*/
+	class eshywm_window* window = server->grabbed_window;
+	wlr_scene_node_set_position(&window->scene_tree->node,
 								server->cursor->x - server->grab_x,
 								server->cursor->y - server->grab_y);
 }
 
-static void process_cursor_resize(struct eshywm_server* server, uint32_t time)
+static void process_cursor_resize(uint32_t time)
 {
 	/*
-	*  Resizing the grabbed view can be a little bit complicated, because we
-	*  could be resizing from any corner or edge. This not only resizes the view
-	*  on one or two axes, but can also move the view if you resize from the top
+	*  Resizing the grabbed window can be a little bit complicated, because we
+	*  could be resizing from any corner or edge. This not only resizes the window
+	*  on one or two axes, but can also move the window if you resize from the top
 	*  or left edges (or top-left corner).
 	* 
 	*  Note that I took some shortcuts here. In a more fleshed-out compositor,
 	*  you'd wait for the client to prepare a buffer at the new size, then
 	*  commit any movement that was prepared.
 	*/
-	struct eshywm_view* view = server->grabbed_view;
+	class eshywm_window* window = server->grabbed_window;
 	double border_x = server->cursor->x - server->grab_x;
 	double border_y = server->cursor->y - server->grab_y;
 	int new_left = server->grab_geobox.x;
@@ -474,40 +485,39 @@ static void process_cursor_resize(struct eshywm_server* server, uint32_t time)
 	}
 
 	struct wlr_box geo_box;
-	wlr_xdg_surface_get_geometry(view->xdg_toplevel->base, &geo_box);
-	wlr_scene_node_set_position(&view->scene_tree->node,
+	wlr_xdg_surface_get_geometry(window->xdg_toplevel->base, &geo_box);
+	wlr_scene_node_set_position(&window->scene_tree->node,
 								new_left - geo_box.x, new_top - geo_box.y);
 
 	int new_width = new_right - new_left;
 	int new_height = new_bottom - new_top;
-	wlr_xdg_toplevel_set_size(view->xdg_toplevel, new_width, new_height);
+	wlr_xdg_toplevel_set_size(window->xdg_toplevel, new_width, new_height);
 }
 
-static void process_cursor_motion(struct eshywm_server* server, uint32_t time)
+static void process_cursor_motion(uint32_t time)
 {
 	/*If the mode is non-passthrough, delegate to those functions.*/
 	if (server->cursor_mode == eshywm_CURSOR_MOVE)
 	{
-		process_cursor_move(server, time);
+		process_cursor_move(time);
 		return;
 	}
 	else if (server->cursor_mode == eshywm_CURSOR_RESIZE)
 	{
-		process_cursor_resize(server, time);
+		process_cursor_resize(time);
 		return;
 	}
 
-	/*Otherwise, find the view under the pointer and send the event along.*/
+	/*Otherwise, find the window under the pointer and send the event along.*/
 	double sx, sy;
 	struct wlr_seat* seat = server->seat;
 	struct wlr_surface* surface = NULL;
-	struct eshywm_view* view = desktop_view_at(server,
-											   server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-	if (!view)
+	class eshywm_window* window = desktop_window_at(server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+	if (!window)
 	{
-		/*If there's no view under the cursor, set the cursor image to a
+		/*If there's no window under the cursor, set the cursor image to a
 		*  default. This is what makes the cursor image appear when you move it
-		*  around the screen, not over any views.*/
+		*  around the screen, not over any windows.*/
 		wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
 	}
 	if (surface)
@@ -538,7 +548,7 @@ static void server_cursor_motion(struct wl_listener* listener, void* data)
 {
 	/*This event is forwarded by the cursor when a pointer emits a _relative_
 	*  pointer motion event (i.e. a delta)*/
-	struct eshywm_server* server =
+	class eshywm_server* server =
 		wl_container_of(listener, server, cursor_motion);
 	struct wlr_pointer_motion_event* event = (wlr_pointer_motion_event*)data;
 	/*The cursor doesn't move unless we tell it to. The cursor automatically
@@ -548,7 +558,7 @@ static void server_cursor_motion(struct wl_listener* listener, void* data)
 	*  the cursor around without any input.*/
 	wlr_cursor_move(server->cursor, &event->pointer->base,
 					event->delta_x, event->delta_y);
-	process_cursor_motion(server, event->time_msec);
+	process_cursor_motion(event->time_msec);
 }
 
 static void server_cursor_motion_absolute(
@@ -560,19 +570,19 @@ static void server_cursor_motion_absolute(
 	*  move the mouse over the window. You could enter the window from any edge,
 	*  so we have to warp the mouse there. There is also some hardware which
 	*  emits these events.*/
-	struct eshywm_server* server =
+	class eshywm_server* server =
 		wl_container_of(listener, server, cursor_motion_absolute);
 	struct wlr_pointer_motion_absolute_event* event = (wlr_pointer_motion_absolute_event*)data;
 	wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x,
 							 event->y);
-	process_cursor_motion(server, event->time_msec);
+	process_cursor_motion(event->time_msec);
 }
 
 static void server_cursor_button(struct wl_listener* listener, void* data)
 {
 	/*This event is forwarded by the cursor when a pointer emits a button
 	*  event.*/
-	struct eshywm_server* server =
+	class eshywm_server* server =
 		wl_container_of(listener, server, cursor_button);
 	struct wlr_pointer_button_event* event = (wlr_pointer_button_event*)data;
 	/*Notify the client with pointer focus that a button press has occurred*/
@@ -580,8 +590,7 @@ static void server_cursor_button(struct wl_listener* listener, void* data)
 								   event->time_msec, event->button, event->state);
 	double sx, sy;
 	struct wlr_surface* surface = NULL;
-	struct eshywm_view* view = desktop_view_at(server,
-											   server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+	class eshywm_window* window = desktop_window_at(server->cursor->x, server->cursor->y, &surface, &sx, &sy);
 	if (event->state == WLR_BUTTON_RELEASED)
 	{
 		/*If you released any buttons, we exit interactive move/resize mode.*/
@@ -590,7 +599,7 @@ static void server_cursor_button(struct wl_listener* listener, void* data)
 	else
 	{
 		/*Focus that client if the button was _pressed_*/
-		focus_view(view, surface);
+		focus_window(window, surface);
 	}
 }
 
@@ -598,7 +607,7 @@ static void server_cursor_axis(struct wl_listener* listener, void* data)
 {
 	/*This event is forwarded by the cursor when a pointer emits an axis event,
 	*  for example when you move the scroll wheel.*/
-	struct eshywm_server* server =
+	class eshywm_server* server =
 		wl_container_of(listener, server, cursor_axis);
 	struct wlr_pointer_axis_event* event = (wlr_pointer_axis_event*)data;
 	/*Notify the client with pointer focus of the axis event.*/
@@ -613,7 +622,7 @@ static void server_cursor_frame(struct wl_listener* listener, void* data)
 	*  event. Frame events are sent after regular pointer events to group
 	*  multiple events together. For instance, two axis events may happen at the
 	*  same time, in which case a frame event won't be sent in between.*/
-	struct eshywm_server* server =
+	class eshywm_server* server =
 		wl_container_of(listener, server, cursor_frame);
 	/*Notify the client with pointer focus of the frame event.*/
 	wlr_seat_pointer_notify_frame(server->seat);
@@ -623,7 +632,7 @@ static void output_frame(struct wl_listener* listener, void* data)
 {
 	/*This function is called every time an output is ready to display a frame,
 	*  generally at the output's refresh rate (e.g. 60Hz).*/
-	struct eshywm_output* output = wl_container_of(listener, output, frame);
+	class eshywm_output* output = wl_container_of(listener, output, frame);
 	struct wlr_scene* scene = output->server->scene;
 
 	struct wlr_scene_output* scene_output = wlr_scene_get_scene_output(
@@ -642,14 +651,14 @@ static void output_request_state(struct wl_listener* listener, void* data)
 	/*This function is called when the backend requests a new state for
 	*  the output. For example, Wayland and X11 backends request a new mode
 	*  when the output window is resized.*/
-	struct eshywm_output* output = wl_container_of(listener, output, request_state);
+	class eshywm_output* output = wl_container_of(listener, output, request_state);
 	const struct wlr_output_event_request_state* event = (wlr_output_event_request_state*)data;
 	wlr_output_commit_state(output->wlr_output, event->state);
 }
 
 static void output_destroy(struct wl_listener* listener, void* data)
 {
-	struct eshywm_output* output = wl_container_of(listener, output, destroy);
+	class eshywm_output* output = wl_container_of(listener, output, destroy);
 
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->request_state.link);
@@ -662,7 +671,7 @@ static void server_new_output(struct wl_listener* listener, void* data)
 {
 	/*This event is raised by the backend when a new output (aka a display or
 	*  monitor) becomes available.*/
-	struct eshywm_server* server = wl_container_of(listener, server, new_output);
+	class eshywm_server* server = wl_container_of(listener, server, new_output);
 	struct wlr_output* wlr_output = (struct wlr_output*)data;
 
 	/*Configures the output created by the backend to use our allocator
@@ -690,7 +699,7 @@ static void server_new_output(struct wl_listener* listener, void* data)
 	wlr_output_state_finish(&state);
 
 	/*Allocates and configures our state for this output*/
-	struct eshywm_output* output = new eshywm_output;
+	class eshywm_output* output = new eshywm_output;
 	output->wlr_output = wlr_output;
 	output->server = server;
 
@@ -723,81 +732,81 @@ static void server_new_output(struct wl_listener* listener, void* data)
 static void xdg_toplevel_map(struct wl_listener* listener, void* data)
 {
 	/*Called when the surface is mapped, or ready to display on-screen.*/
-	struct eshywm_view* view = wl_container_of(listener, view, map);
+	class eshywm_window* window = wl_container_of(listener, window, map);
 
-	wl_list_insert(&view->server->views, &view->link);
+	wl_list_insert(&window->server->windows, &window->link);
 
-	focus_view(view, view->xdg_toplevel->base->surface);
+	focus_window(window, window->xdg_toplevel->base->surface);
 }
 
 static void xdg_toplevel_unmap(struct wl_listener* listener, void* data)
 {
 	/*Called when the surface is unmapped, and should no longer be shown.*/
-	struct eshywm_view* view = wl_container_of(listener, view, unmap);
+	class eshywm_window* window = wl_container_of(listener, window, unmap);
 
-	/*Reset the cursor mode if the grabbed view was unmapped.*/
-	if (view == view->server->grabbed_view)
+	/*Reset the cursor mode if the grabbed window was unmapped.*/
+	if (window == window->server->grabbed_window)
 	{
-		reset_cursor_mode(view->server);
+		reset_cursor_mode(window->server);
 	}
 
-	wl_list_remove(&view->link);
+	wl_list_remove(&window->link);
 }
 
 static void xdg_toplevel_destroy(struct wl_listener* listener, void* data)
 {
 	/*Called when the surface is destroyed and should never be shown again.*/
-	struct eshywm_view* view = wl_container_of(listener, view, destroy);
+	class eshywm_window* window = wl_container_of(listener, window, destroy);
 
-	wl_list_remove(&view->map.link);
-	wl_list_remove(&view->unmap.link);
-	wl_list_remove(&view->destroy.link);
-	wl_list_remove(&view->request_move.link);
-	wl_list_remove(&view->request_resize.link);
-	wl_list_remove(&view->request_maximize.link);
-	wl_list_remove(&view->request_fullscreen.link);
+	wl_list_remove(&window->map.link);
+	wl_list_remove(&window->unmap.link);
+	wl_list_remove(&window->destroy.link);
+	wl_list_remove(&window->request_move.link);
+	wl_list_remove(&window->request_resize.link);
+	wl_list_remove(&window->request_maximize.link);
+	wl_list_remove(&window->request_fullscreen.link);
 
-	free(view);
+	free(window);
 }
 
-static void begin_interactive(struct eshywm_view* view,
+static void begin_interactive(class eshywm_window* window,
 							  enum eshywm_cursor_mode mode, uint32_t edges)
 {
 	/*This function sets up an interactive move or resize operation, where the
 	*  compositor stops propegating pointer events to clients and instead
 	*  consumes them itself, to move or resize windows.*/
-	struct eshywm_server* server = view->server;
+	class eshywm_server* server = window->server;
 	struct wlr_surface* focused_surface =
 		server->seat->pointer_state.focused_surface;
-	if (view->xdg_toplevel->base->surface !=
+	if (window->xdg_toplevel->base->surface !=
 		wlr_surface_get_root_surface(focused_surface))
 	{
 		/*Deny move/resize requests from unfocused clients.*/
 		return;
 	}
-	server->grabbed_view = view;
+	server->grabbed_window = window;
 	server->cursor_mode = mode;
 
 	if (mode == eshywm_CURSOR_MOVE)
 	{
-		server->grab_x = server->cursor->x - view->scene_tree->node.x;
-		server->grab_y = server->cursor->y - view->scene_tree->node.y;
+		server->grab_x = server->cursor->x - window->scene_tree->node.x;
+		server->grab_y = server->cursor->y - window->scene_tree->node.y;
 	}
 	else
 	{
 		struct wlr_box geo_box;
-		wlr_xdg_surface_get_geometry(view->xdg_toplevel->base, &geo_box);
+		wlr_xdg_surface_get_geometry(window->xdg_toplevel->base, &geo_box);
 
-		double border_x = (view->scene_tree->node.x + geo_box.x) +
+		double border_x = (window->scene_tree->node.x + geo_box.x) +
 						  ((edges & WLR_EDGE_RIGHT) ? geo_box.width : 0);
-		double border_y = (view->scene_tree->node.y + geo_box.y) +
+		double border_y = (window->scene_tree->node.y + geo_box.y) +
 						  ((edges & WLR_EDGE_BOTTOM) ? geo_box.height : 0);
 		server->grab_x = server->cursor->x - border_x;
 		server->grab_y = server->cursor->y - border_y;
 
 		server->grab_geobox = geo_box;
-		server->grab_geobox.x += view->scene_tree->node.x;
-		server->grab_geobox.y += view->scene_tree->node.y;
+		server->grab_geobox.x += window->scene_tree->node.x;
+		server->grab_geobox.y += window->scene_tree->node.y;
 
 		server->resize_edges = edges;
 	}
@@ -811,8 +820,8 @@ static void xdg_toplevel_request_move(
 	*  decorations. Note that a more sophisticated compositor should check the
 	*  provided serial against a list of button press serials sent to this
 	*  client, to prevent the client from requesting this whenever they want.*/
-	struct eshywm_view* view = wl_container_of(listener, view, request_move);
-	begin_interactive(view, eshywm_CURSOR_MOVE, 0);
+	class eshywm_window* window = wl_container_of(listener, window, request_move);
+	begin_interactive(window, eshywm_CURSOR_MOVE, 0);
 }
 
 static void xdg_toplevel_request_resize(
@@ -824,8 +833,8 @@ static void xdg_toplevel_request_resize(
 	*  provided serial against a list of button press serials sent to this
 	*  client, to prevent the client from requesting this whenever they want.*/
 	struct wlr_xdg_toplevel_resize_event* event = (wlr_xdg_toplevel_resize_event*)data;
-	struct eshywm_view* view = wl_container_of(listener, view, request_resize);
-	begin_interactive(view, eshywm_CURSOR_RESIZE, event->edges);
+	class eshywm_window* window = wl_container_of(listener, window, request_resize);
+	begin_interactive(window, eshywm_CURSOR_RESIZE, event->edges);
 }
 
 static void xdg_toplevel_request_maximize(
@@ -836,25 +845,25 @@ static void xdg_toplevel_request_maximize(
 	*  client-side decorations. eshywm doesn't support maximization, but
 	*  to conform to xdg-shell protocol we still must send a configure.
 	*  wlr_xdg_surface_schedule_configure() is used to send an empty reply.*/
-	struct eshywm_view* view =
-		wl_container_of(listener, view, request_maximize);
-	wlr_xdg_surface_schedule_configure(view->xdg_toplevel->base);
+	class eshywm_window* window =
+		wl_container_of(listener, window, request_maximize);
+	wlr_xdg_surface_schedule_configure(window->xdg_toplevel->base);
 }
 
 static void xdg_toplevel_request_fullscreen(
 	struct wl_listener* listener, void* data)
 {
 	/*Just as with request_maximize, we must send a configure here.*/
-	struct eshywm_view* view =
-		wl_container_of(listener, view, request_fullscreen);
-	wlr_xdg_surface_schedule_configure(view->xdg_toplevel->base);
+	class eshywm_window* window =
+		wl_container_of(listener, window, request_fullscreen);
+	wlr_xdg_surface_schedule_configure(window->xdg_toplevel->base);
 }
 
 static void server_new_xdg_surface(struct wl_listener* listener, void* data)
 {
 	/*This event is raised when wlr_xdg_shell receives a new xdg surface from a
 	*  client, either a toplevel (application window) or popup.*/
-	struct eshywm_server* server =
+	class eshywm_server* server =
 		wl_container_of(listener, server, new_xdg_surface);
 	struct wlr_xdg_surface* xdg_surface = (wlr_xdg_surface*)data;
 
@@ -875,35 +884,35 @@ static void server_new_xdg_surface(struct wl_listener* listener, void* data)
 	}
 	assert(xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL);
 
-	/*Allocate a eshywm_view for this surface*/
-	struct eshywm_view* view = new eshywm_view;
-	view->server = server;
-	view->xdg_toplevel = xdg_surface->toplevel;
-	view->scene_tree = wlr_scene_xdg_surface_create(
-		&view->server->scene->tree, view->xdg_toplevel->base);
-	view->scene_tree->node.data = view;
-	xdg_surface->data = view->scene_tree;
+	/*Allocate a eshywm_window for this surface*/
+	class eshywm_window* window = new eshywm_window;
+	window->server = server;
+	window->xdg_toplevel = xdg_surface->toplevel;
+	window->scene_tree = wlr_scene_xdg_surface_create(
+		&window->server->scene->tree, window->xdg_toplevel->base);
+	window->scene_tree->node.data = window;
+	xdg_surface->data = window->scene_tree;
 
 	/*Listen to the various events it can emit*/
-	view->map.notify = xdg_toplevel_map;
-	wl_signal_add(&xdg_surface->surface->events.map, &view->map);
-	view->unmap.notify = xdg_toplevel_unmap;
-	wl_signal_add(&xdg_surface->surface->events.unmap, &view->unmap);
-	view->destroy.notify = xdg_toplevel_destroy;
-	wl_signal_add(&xdg_surface->events.destroy, &view->destroy);
+	window->map.notify = xdg_toplevel_map;
+	wl_signal_add(&xdg_surface->surface->events.map, &window->map);
+	window->unmap.notify = xdg_toplevel_unmap;
+	wl_signal_add(&xdg_surface->surface->events.unmap, &window->unmap);
+	window->destroy.notify = xdg_toplevel_destroy;
+	wl_signal_add(&xdg_surface->events.destroy, &window->destroy);
 
 	/*cotd*/
 	struct wlr_xdg_toplevel* toplevel = xdg_surface->toplevel;
-	view->request_move.notify = xdg_toplevel_request_move;
-	wl_signal_add(&toplevel->events.request_move, &view->request_move);
-	view->request_resize.notify = xdg_toplevel_request_resize;
-	wl_signal_add(&toplevel->events.request_resize, &view->request_resize);
-	view->request_maximize.notify = xdg_toplevel_request_maximize;
+	window->request_move.notify = xdg_toplevel_request_move;
+	wl_signal_add(&toplevel->events.request_move, &window->request_move);
+	window->request_resize.notify = xdg_toplevel_request_resize;
+	wl_signal_add(&toplevel->events.request_resize, &window->request_resize);
+	window->request_maximize.notify = xdg_toplevel_request_maximize;
 	wl_signal_add(&toplevel->events.request_maximize,
-				  &view->request_maximize);
-	view->request_fullscreen.notify = xdg_toplevel_request_fullscreen;
+				  &window->request_maximize);
+	window->request_fullscreen.notify = xdg_toplevel_request_fullscreen;
 	wl_signal_add(&toplevel->events.request_fullscreen,
-				  &view->request_fullscreen);
+				  &window->request_fullscreen);
 }
 
 int main(int argc, char* argv[])
@@ -930,16 +939,16 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
-	struct eshywm_server server = {0};
+	server = std::make_shared<eshywm_server>();
 	/*The Wayland display is managed by libwayland. It handles accepting
 	*  clients from the Unix socket, manging Wayland globals, and so on.*/
-	server.wl_display = wl_display_create();
+	server->wl_display = wl_display_create();
 	/*The backend is a wlroots feature which abstracts the underlying input and
 	*  output hardware. The autocreate option will choose the most suitable
 	*  backend based on the current environment, such as opening an X11 window
 	*  if an X11 server is running.*/
-	server.backend = wlr_backend_autocreate(server.wl_display, NULL);
-	if (server.backend == NULL)
+	server->backend = wlr_backend_autocreate(server->wl_display, NULL);
+	if (server->backend == NULL)
 	{
 		wlr_log(WLR_ERROR, "failed to create wlr_backend");
 		return 1;
@@ -949,22 +958,22 @@ int main(int argc, char* argv[])
 	*  can also specify a renderer using the WLR_RENDERER env var.
 	*  The renderer is responsible for defining the various pixel formats it
 	*  supports for shared memory, this configures that for clients.*/
-	server.renderer = wlr_renderer_autocreate(server.backend);
-	if (server.renderer == NULL)
+	server->renderer = wlr_renderer_autocreate(server->backend);
+	if (server->renderer == NULL)
 	{
 		wlr_log(WLR_ERROR, "failed to create wlr_renderer");
 		return 1;
 	}
 
-	wlr_renderer_init_wl_display(server.renderer, server.wl_display);
+	wlr_renderer_init_wl_display(server->renderer, server->wl_display);
 
 	/*Autocreates an allocator for us.
 	*  The allocator is the bridge between the renderer and the backend. It
 	*  handles the buffer creation, allowing wlroots to render onto the
 	*  screen*/
-	server.allocator = wlr_allocator_autocreate(server.backend,
-												server.renderer);
-	if (server.allocator == NULL)
+	server->allocator = wlr_allocator_autocreate(server->backend,
+												server->renderer);
+	if (server->allocator == NULL)
 	{
 		wlr_log(WLR_ERROR, "failed to create wlr_allocator");
 		return 1;
@@ -977,19 +986,19 @@ int main(int argc, char* argv[])
 	*  to dig your fingers in and play with their behavior if you want. Note that
 	*  the clients cannot set the selection directly without compositor approval,
 	*  see the handling of the request_set_selection event below.*/
-	wlr_compositor_create(server.wl_display, 5, server.renderer);
-	wlr_subcompositor_create(server.wl_display);
-	wlr_data_device_manager_create(server.wl_display);
+	wlr_compositor_create(server->wl_display, 5, server->renderer);
+	wlr_subcompositor_create(server->wl_display);
+	wlr_data_device_manager_create(server->wl_display);
 
 	/*Creates an output layout, which a wlroots utility for working with an
 	*  arrangement of screens in a physical layout.*/
-	server.output_layout = wlr_output_layout_create();
+	server->output_layout = wlr_output_layout_create();
 
 	/*Configure a listener to be notified when new outputs are available on the
 	*  backend.*/
-	wl_list_init(&server.outputs);
-	server.new_output.notify = server_new_output;
-	wl_signal_add(&server.backend->events.new_output, &server.new_output);
+	wl_list_init(&server->outputs);
+	server->new_output.notify = server_new_output;
+	wl_signal_add(&server->backend->events.new_output, &server->new_output);
 
 	/*Create a scene graph. This is a wlroots abstraction that handles all
 	*  rendering and damage tracking. All the compositor author needs to do
@@ -997,8 +1006,8 @@ int main(int argc, char* argv[])
 	*  positions and then call wlr_scene_output_commit() to render a frame if
 	*  necessary.
 	*/
-	server.scene = wlr_scene_create();
-	wlr_scene_attach_output_layout(server.scene, server.output_layout);
+	server->scene = wlr_scene_create();
+	wlr_scene_attach_output_layout(server->scene, server->output_layout);
 
 	/*Set up xdg-shell version 3. The xdg-shell is a Wayland protocol which is
 	*  used for application windows. For more detail on shells, refer to my
@@ -1006,24 +1015,24 @@ int main(int argc, char* argv[])
 	* 
 	*  https://drewdevault.com/2018/07/29/Wayland-shells.html
 	*/
-	wl_list_init(&server.views);
-	server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
-	server.new_xdg_surface.notify = server_new_xdg_surface;
-	wl_signal_add(&server.xdg_shell->events.new_surface,
-				  &server.new_xdg_surface);
+	wl_list_init(&server->windows);
+	server->xdg_shell = wlr_xdg_shell_create(server->wl_display, 3);
+	server->new_xdg_surface.notify = server_new_xdg_surface;
+	wl_signal_add(&server->xdg_shell->events.new_surface,
+				  &server->new_xdg_surface);
 
 	/*
 	*  Creates a cursor, which is a wlroots utility for tracking the cursor
 	*  image shown on screen.
 	*/
-	server.cursor = wlr_cursor_create();
-	wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
+	server->cursor = wlr_cursor_create();
+	wlr_cursor_attach_output_layout(server->cursor, server->output_layout);
 
 	/*Creates an xcursor manager, another wlroots utility which loads up
 	*  Xcursor themes to source cursor images from and makes sure that cursor
 	*  images are available at all scale factors on the screen (necessary for
 	*  HiDPI support).*/
-	server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+	server->cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
 
 	/*
 	*  wlr_cursor* only* displays an image on screen. It does not move around
@@ -1037,18 +1046,18 @@ int main(int argc, char* argv[])
 	* 
 	*  And more comments are sprinkled throughout the notify functions above.
 	*/
-	server.cursor_mode = eshywm_CURSOR_PASSTHROUGH;
-	server.cursor_motion.notify = server_cursor_motion;
-	wl_signal_add(&server.cursor->events.motion, &server.cursor_motion);
-	server.cursor_motion_absolute.notify = server_cursor_motion_absolute;
-	wl_signal_add(&server.cursor->events.motion_absolute,
-				  &server.cursor_motion_absolute);
-	server.cursor_button.notify = server_cursor_button;
-	wl_signal_add(&server.cursor->events.button, &server.cursor_button);
-	server.cursor_axis.notify = server_cursor_axis;
-	wl_signal_add(&server.cursor->events.axis, &server.cursor_axis);
-	server.cursor_frame.notify = server_cursor_frame;
-	wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
+	server->cursor_mode = eshywm_CURSOR_PASSTHROUGH;
+	server->cursor_motion.notify = server_cursor_motion;
+	wl_signal_add(&server->cursor->events.motion, &server->cursor_motion);
+	server->cursor_motion_absolute.notify = server_cursor_motion_absolute;
+	wl_signal_add(&server->cursor->events.motion_absolute,
+				  &server->cursor_motion_absolute);
+	server->cursor_button.notify = server_cursor_button;
+	wl_signal_add(&server->cursor->events.button, &server->cursor_button);
+	server->cursor_axis.notify = server_cursor_axis;
+	wl_signal_add(&server->cursor->events.axis, &server->cursor_axis);
+	server->cursor_frame.notify = server_cursor_frame;
+	wl_signal_add(&server->cursor->events.frame, &server->cursor_frame);
 
 	/*
 	*  Configures a seat, which is a single "seat" at which a user sits and
@@ -1056,22 +1065,22 @@ int main(int argc, char* argv[])
 	*  pointer, touch, and drawing tablet device. We also rig up a listener to
 	*  let us know when new input devices are available on the backend.
 	*/
-	wl_list_init(&server.keyboards);
-	server.new_input.notify = server_new_input;
-	wl_signal_add(&server.backend->events.new_input, &server.new_input);
-	server.seat = wlr_seat_create(server.wl_display, "seat0");
-	server.request_cursor.notify = seat_request_cursor;
-	wl_signal_add(&server.seat->events.request_set_cursor,
-				  &server.request_cursor);
-	server.request_set_selection.notify = seat_request_set_selection;
-	wl_signal_add(&server.seat->events.request_set_selection,
-				  &server.request_set_selection);
+	wl_list_init(&server->keyboards);
+	server->new_input.notify = server_new_input;
+	wl_signal_add(&server->backend->events.new_input, &server->new_input);
+	server->seat = wlr_seat_create(server->wl_display, "seat0");
+	server->request_cursor.notify = seat_request_cursor;
+	wl_signal_add(&server->seat->events.request_set_cursor,
+				  &server->request_cursor);
+	server->request_set_selection.notify = seat_request_set_selection;
+	wl_signal_add(&server->seat->events.request_set_selection,
+				  &server->request_set_selection);
 
 	/*Add a Unix socket to the Wayland display.*/
-	const char* socket = wl_display_add_socket_auto(server.wl_display);
+	const char* socket = wl_display_add_socket_auto(server->wl_display);
 	if (!socket)
 	{
-		wlr_backend_destroy(server.backend);
+		wlr_backend_destroy(server->backend);
 		return 1;
 	}
 
@@ -1079,10 +1088,10 @@ int main(int argc, char* argv[])
 
 	/*Start the backend. This will enumerate outputs and inputs, become the DRM
 	*  master, etc*/
-	if (!wlr_backend_start(server.backend))
+	if (!wlr_backend_start(server->backend))
 	{
-		wlr_backend_destroy(server.backend);
-		wl_display_destroy(server.wl_display);
+		wlr_backend_destroy(server->backend);
+		wl_display_destroy(server->wl_display);
 		return 1;
 	}
 
@@ -1102,14 +1111,14 @@ int main(int argc, char* argv[])
 	*  frame events at the refresh rate, and so on.*/
 	wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s",
 			socket);
-	wl_display_run(server.wl_display);
+	wl_display_run(server->wl_display);
 
 	/*Once wl_display_run returns, we destroy all clients then shut down the
-	*  server.*/
-	wl_display_destroy_clients(server.wl_display);
-	wlr_scene_node_destroy(&server.scene->tree.node);
-	wlr_xcursor_manager_destroy(server.cursor_mgr);
-	wlr_output_layout_destroy(server.output_layout);
-	wl_display_destroy(server.wl_display);
+	*  server->*/
+	wl_display_destroy_clients(server->wl_display);
+	wlr_scene_node_destroy(&server->scene->tree.node);
+	wlr_xcursor_manager_destroy(server->cursor_mgr);
+	wlr_output_layout_destroy(server->output_layout);
+	wl_display_destroy(server->wl_display);
 	return 0;
 }
