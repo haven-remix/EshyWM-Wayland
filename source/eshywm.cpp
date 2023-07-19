@@ -8,6 +8,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <memory>
+#include <vector>
+#include <algorithm>
 
 #include <wayland-server-core.h>
 
@@ -37,7 +39,11 @@ extern "C"
 #undef static
 
 #include <xkbcommon/xkbcommon.h>
+
 class eshywm_server;
+class eshywm_window;
+class eshywm_keyboard;
+class eshywm_output;
 
 std::shared_ptr<eshywm_server> server = nullptr;
 
@@ -61,7 +67,7 @@ public:
 
 	struct wlr_xdg_shell* xdg_shell;
 	struct wl_listener new_xdg_surface;
-	struct wl_list windows;
+	std::vector<eshywm_window*> window_list;
 
 	struct wlr_cursor* cursor;
 	struct wlr_xcursor_manager* cursor_mgr;
@@ -75,7 +81,7 @@ public:
 	struct wl_listener new_input;
 	struct wl_listener request_cursor;
 	struct wl_listener request_set_selection;
-	struct wl_list keyboards;
+	std::vector<eshywm_keyboard*> keyboard_list;
 	enum eshywm_cursor_mode cursor_mode;
 	class eshywm_window* grabbed_window;
 	double grab_x, grab_y;
@@ -83,7 +89,7 @@ public:
 	uint32_t resize_edges;
 
 	struct wlr_output_layout* output_layout;
-	struct wl_list outputs;
+	std::vector<eshywm_output*> output_list;
 	struct wl_listener new_output;
 };
 
@@ -91,7 +97,6 @@ class eshywm_output
 {
 public:
 
-	struct wl_list link;
 	class eshywm_server* server;
 	struct wlr_output* wlr_output;
 	struct wl_listener frame;
@@ -103,7 +108,7 @@ class eshywm_window
 {
 public:
 
-	struct wl_list link;
+	wl_list link;
 	class eshywm_server* server;
 	struct wlr_xdg_toplevel* xdg_toplevel;
 	struct wlr_scene_tree* scene_tree;
@@ -120,7 +125,6 @@ class eshywm_keyboard
 {
 public:
 
-	struct wl_list link;
 	class eshywm_server* server;
 	struct wlr_keyboard* wlr_keyboard;
 
@@ -129,54 +133,45 @@ public:
 	struct wl_listener destroy;
 };
 
-static void focus_window(class eshywm_window* window, struct wlr_surface* surface)
+static void focus_window(eshywm_window* window, struct wlr_surface* surface)
 {
-	/*Note: this function only deals with keyboard focus.*/
-	if (window == NULL)
-	{
+	//Note: this function only deals with keyboard focus
+	if (window == nullptr)
 		return;
-	}
-	class eshywm_server* server = window->server;
+
 	struct wlr_seat* seat = server->seat;
 	struct wlr_surface* prev_surface = seat->keyboard_state.focused_surface;
+	
+	//Don't re-focus an already focused surface
 	if (prev_surface == surface)
-	{
-		/*Don't re-focus an already focused surface.*/
 		return;
-	}
+
 	if (prev_surface)
 	{
-		/*
-		*  Deactivate the previously focused surface. This lets the client know
-		*  it no longer has focus and the client will repaint accordingly, e.g.
-		*  stop displaying a caret.
-		*/
-		struct wlr_xdg_surface* previous =
-			wlr_xdg_surface_try_from_wlr_surface(seat->keyboard_state.focused_surface);
+		struct wlr_xdg_surface* previous = wlr_xdg_surface_try_from_wlr_surface(seat->keyboard_state.focused_surface);
 		assert(previous != NULL && previous->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL);
 		wlr_xdg_toplevel_set_activated(previous->toplevel, false);
 	}
+
 	struct wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat);
-	/*Move the window to the front*/
+	
+	//Move the window to the front
 	wlr_scene_node_raise_to_top(&window->scene_tree->node);
-	wl_list_remove(&window->link);
-	wl_list_insert(&server->windows, &window->link);
-	/*Activate the new surface*/
-	wlr_xdg_toplevel_set_activated(window->xdg_toplevel, true);
-	/*
-	*  Tell the seat to have the keyboard enter this surface. wlroots will keep
-	*  track of this and automatically send key events to the appropriate
-	*  clients without additional work on your part.
-	*/
-	if (keyboard != NULL)
+
+	auto pos = std::find(server->window_list.begin(), server->window_list.end(), window);
+	if(pos != server->window_list.end())
 	{
-		wlr_seat_keyboard_notify_enter(seat, window->xdg_toplevel->base->surface,
-									   keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
+		auto it = server->window_list.begin() + std::distance(server->window_list.begin(), pos);
+    	std::rotate(server->window_list.begin(), it, it + 1);
 	}
+
+	wlr_xdg_toplevel_set_activated(window->xdg_toplevel, true);
+	
+	if (keyboard != NULL)
+		wlr_seat_keyboard_notify_enter(seat, window->xdg_toplevel->base->surface, keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
 }
 
-static void keyboard_handle_modifiers(
-	struct wl_listener* listener, void* data)
+static void keyboard_handle_modifiers(struct wl_listener* listener, void* data)
 {
 	/*This event is raised when a modifier key, such as shift or alt, is
 	*  pressed. We simply communicate this to the client.*/
@@ -211,12 +206,12 @@ static bool handle_keybinding(xkb_keysym_t sym)
 	case XKB_KEY_F1:
 	{
 		/*Cycle to the next window*/
-		if (wl_list_length(&server->windows) < 2)
-		{
-			break;
-		}
-		class eshywm_window* next_window = (eshywm_window*)wl_container_of(server->windows.prev, next_window, link);
-		focus_window(next_window, next_window->xdg_toplevel->base->surface);
+		// if (wl_list_length(&server->windows) < 2)
+		// {
+		// 	break;
+		// }
+		// class eshywm_window* next_window = (eshywm_window*)wl_container_of(server->windows.prev, next_window, link);
+		// focus_window(next_window, next_window->xdg_toplevel->base->surface);
 		break;
 	}
 	default:
@@ -225,8 +220,7 @@ static bool handle_keybinding(xkb_keysym_t sym)
 	return true;
 }
 
-static void keyboard_handle_key(
-	struct wl_listener* listener, void* data)
+static void keyboard_handle_key(struct wl_listener* listener, void* data)
 {
 	/*This event is raised when a key is pressed or released.*/
 	class eshywm_keyboard* keyboard =
@@ -275,24 +269,22 @@ static void keyboard_handle_destroy(struct wl_listener* listener, void* data)
 	wl_list_remove(&keyboard->modifiers.link);
 	wl_list_remove(&keyboard->key.link);
 	wl_list_remove(&keyboard->destroy.link);
-	wl_list_remove(&keyboard->link);
-	free(keyboard);
+	//wl_list_remove(&keyboard->link);
+	//free(keyboard);
 }
 
-static void server_new_keyboard(
-								struct wlr_input_device* device)
+static void server_new_keyboard(struct wlr_input_device* device)
 {
 	struct wlr_keyboard* wlr_keyboard = wlr_keyboard_from_input_device(device);
 
-	class eshywm_keyboard* keyboard = new eshywm_keyboard;
+	eshywm_keyboard* keyboard = new eshywm_keyboard;
 	keyboard->server = server.get();
 	keyboard->wlr_keyboard = wlr_keyboard;
 
 	/*We need to prepare an XKB keymap and assign it to the keyboard. This
 	*  assumes the defaults (e.g. layout = "us").*/
 	struct xkb_context* context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	struct xkb_keymap* keymap = xkb_keymap_new_from_names(context, NULL,
-														  XKB_KEYMAP_COMPILE_NO_FLAGS);
+	struct xkb_keymap* keymap = xkb_keymap_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
 
 	wlr_keyboard_set_keymap(wlr_keyboard, keymap);
 	xkb_keymap_unref(keymap);
@@ -310,11 +302,10 @@ static void server_new_keyboard(
 	wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
 
 	/*And add the keyboard to our list of keyboards*/
-	wl_list_insert(&server->keyboards, &keyboard->link);
+	server->keyboard_list.push_back(keyboard);
 }
 
-static void server_new_pointer(
-							   struct wlr_input_device* device)
+static void server_new_pointer(struct wlr_input_device* device)
 {
 	/*We don't do anything special with pointers. All of our pointer handling
 	*  is proxied through wlr_cursor. On another compositor, you might take this
@@ -345,21 +336,18 @@ static void server_new_input(struct wl_listener* listener, void* data)
 	*  communiciated to the client. In eshywm we always have a cursor, even if
 	*  there are no pointer devices, so we always include that capability.*/
 	uint32_t caps = WL_SEAT_CAPABILITY_POINTER;
-	if (!wl_list_empty(&server->keyboards))
-	{
+	if (server->keyboard_list.size() > 0)
 		caps |= WL_SEAT_CAPABILITY_KEYBOARD;
-	}
+
 	wlr_seat_set_capabilities(server->seat, caps);
 }
 
 static void seat_request_cursor(struct wl_listener* listener, void* data)
 {
-	class eshywm_server* server = wl_container_of(
-		listener, server, request_cursor);
+	class eshywm_server* server = wl_container_of(listener, server, request_cursor);
 	/*This event is raised by the seat when a client provides a cursor image*/
 	struct wlr_seat_pointer_request_set_cursor_event* event = (wlr_seat_pointer_request_set_cursor_event*)data;
-	struct wlr_seat_client* focused_client =
-		server->seat->pointer_state.focused_client;
+	struct wlr_seat_client* focused_client = server->seat->pointer_state.focused_client;
 	/*This can be sent by any client, so we check to make sure this one is
 	*  actually has pointer focus first.*/
 	if (focused_client == event->seat_client)
@@ -368,8 +356,7 @@ static void seat_request_cursor(struct wl_listener* listener, void* data)
 		*  provided surface as the cursor image. It will set the hardware cursor
 		*  on the output that it's currently on and continue to do so as the
 		*  cursor moves between outputs.*/
-		wlr_cursor_set_surface(server->cursor, event->surface,
-							   event->hotspot_x, event->hotspot_y);
+		wlr_cursor_set_surface(server->cursor, event->surface, event->hotspot_x, event->hotspot_y);
 	}
 }
 
@@ -385,7 +372,7 @@ static void seat_request_set_selection(struct wl_listener* listener, void* data)
 	wlr_seat_set_selection(server->seat, event->source, event->serial);
 }
 
-static class eshywm_window* desktop_window_at(double lx, double ly, struct wlr_surface* *surface, double* sx, double* sy)
+static eshywm_window* desktop_window_at(double lx, double ly, struct wlr_surface* *surface, double* sx, double* sy)
 {
 	/*This returns the topmost node in the scene at the given layout coords.
 	*  we only care about surface nodes as we are specifically looking for a
@@ -412,6 +399,7 @@ static class eshywm_window* desktop_window_at(double lx, double ly, struct wlr_s
 	{
 		tree = tree->node.parent;
 	}
+
 	return (eshywm_window*)tree->node.data;
 }
 
@@ -512,7 +500,9 @@ static void process_cursor_motion(uint32_t time)
 	double sx, sy;
 	struct wlr_seat* seat = server->seat;
 	struct wlr_surface* surface = NULL;
-	class eshywm_window* window = desktop_window_at(server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+	wlr_log(WLR_INFO, "got here");
+	eshywm_window* window = desktop_window_at(server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+	wlr_log(WLR_INFO, "got here too");
 	if (!window)
 	{
 		/*If there's no window under the cursor, set the cursor image to a
@@ -561,8 +551,7 @@ static void server_cursor_motion(struct wl_listener* listener, void* data)
 	process_cursor_motion(event->time_msec);
 }
 
-static void server_cursor_motion_absolute(
-	struct wl_listener* listener, void* data)
+static void server_cursor_motion_absolute(struct wl_listener* listener, void* data)
 {
 	/*This event is forwarded by the cursor when a pointer emits an _absolute_
 	*  motion event, from 0..1 on each axis. This happens, for example, when
@@ -590,7 +579,8 @@ static void server_cursor_button(struct wl_listener* listener, void* data)
 								   event->time_msec, event->button, event->state);
 	double sx, sy;
 	struct wlr_surface* surface = NULL;
-	class eshywm_window* window = desktop_window_at(server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+	eshywm_window* window_raw = desktop_window_at(server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+
 	if (event->state == WLR_BUTTON_RELEASED)
 	{
 		/*If you released any buttons, we exit interactive move/resize mode.*/
@@ -598,6 +588,7 @@ static void server_cursor_button(struct wl_listener* listener, void* data)
 	}
 	else
 	{
+		eshywm_window* window(window_raw);
 		/*Focus that client if the button was _pressed_*/
 		focus_window(window, surface);
 	}
@@ -663,15 +654,14 @@ static void output_destroy(struct wl_listener* listener, void* data)
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
-	wl_list_remove(&output->link);
-	free(output);
+	//wl_list_remove(&output->link);
+	//free(output);
 }
 
 static void server_new_output(struct wl_listener* listener, void* data)
 {
 	/*This event is raised by the backend when a new output (aka a display or
 	*  monitor) becomes available.*/
-	class eshywm_server* server = wl_container_of(listener, server, new_output);
 	struct wlr_output* wlr_output = (struct wlr_output*)data;
 
 	/*Configures the output created by the backend to use our allocator
@@ -699,9 +689,9 @@ static void server_new_output(struct wl_listener* listener, void* data)
 	wlr_output_state_finish(&state);
 
 	/*Allocates and configures our state for this output*/
-	class eshywm_output* output = new eshywm_output;
+	eshywm_output* output = new eshywm_output;
 	output->wlr_output = wlr_output;
-	output->server = server;
+	output->server = server.get();
 
 	/*Sets up a listener for the frame event.*/
 	output->frame.notify = output_frame;
@@ -715,7 +705,7 @@ static void server_new_output(struct wl_listener* listener, void* data)
 	output->destroy.notify = output_destroy;
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
-	wl_list_insert(&server->outputs, &output->link);
+	server->output_list.push_back(output);
 
 	/*Adds this to the output layout. The add_auto function arranges outputs
 	*  from left-to-right in the order they appear. A more sophisticated
@@ -734,7 +724,7 @@ static void xdg_toplevel_map(struct wl_listener* listener, void* data)
 	/*Called when the surface is mapped, or ready to display on-screen.*/
 	class eshywm_window* window = wl_container_of(listener, window, map);
 
-	wl_list_insert(&window->server->windows, &window->link);
+	server->window_list.push_back(window);
 
 	focus_window(window, window->xdg_toplevel->base->surface);
 }
@@ -742,15 +732,20 @@ static void xdg_toplevel_map(struct wl_listener* listener, void* data)
 static void xdg_toplevel_unmap(struct wl_listener* listener, void* data)
 {
 	/*Called when the surface is unmapped, and should no longer be shown.*/
-	class eshywm_window* window = wl_container_of(listener, window, unmap);
+	class eshywm_window* window_raw = wl_container_of(listener, window_raw, unmap);
+	eshywm_window* window(window_raw);
 
 	/*Reset the cursor mode if the grabbed window was unmapped.*/
-	if (window == window->server->grabbed_window)
+	if (window_raw == window->server->grabbed_window)
 	{
 		reset_cursor_mode(window->server);
 	}
 
-	wl_list_remove(&window->link);
+	//auto pos = std::find(server->window_list.begin(), server->window_list.end(), window);
+	//if(pos != server->window_list.end())
+	//{
+	//	//server->window_list.erase(server->window_list.begin() + std::distance(server->window_list.begin(), pos));
+	//}
 }
 
 static void xdg_toplevel_destroy(struct wl_listener* listener, void* data)
@@ -765,12 +760,10 @@ static void xdg_toplevel_destroy(struct wl_listener* listener, void* data)
 	wl_list_remove(&window->request_resize.link);
 	wl_list_remove(&window->request_maximize.link);
 	wl_list_remove(&window->request_fullscreen.link);
-
 	free(window);
 }
 
-static void begin_interactive(class eshywm_window* window,
-							  enum eshywm_cursor_mode mode, uint32_t edges)
+static void begin_interactive(class eshywm_window* window, enum eshywm_cursor_mode mode, uint32_t edges)
 {
 	/*This function sets up an interactive move or resize operation, where the
 	*  compositor stops propegating pointer events to clients and instead
@@ -812,8 +805,7 @@ static void begin_interactive(class eshywm_window* window,
 	}
 }
 
-static void xdg_toplevel_request_move(
-	struct wl_listener* listener, void* data)
+static void xdg_toplevel_request_move(struct wl_listener* listener, void* data)
 {
 	/*This event is raised when a client would like to begin an interactive
 	*  move, typically because the user clicked on their client-side
@@ -824,8 +816,7 @@ static void xdg_toplevel_request_move(
 	begin_interactive(window, eshywm_CURSOR_MOVE, 0);
 }
 
-static void xdg_toplevel_request_resize(
-	struct wl_listener* listener, void* data)
+static void xdg_toplevel_request_resize(struct wl_listener* listener, void* data)
 {
 	/*This event is raised when a client would like to begin an interactive
 	*  resize, typically because the user clicked on their client-side
@@ -837,8 +828,7 @@ static void xdg_toplevel_request_resize(
 	begin_interactive(window, eshywm_CURSOR_RESIZE, event->edges);
 }
 
-static void xdg_toplevel_request_maximize(
-	struct wl_listener* listener, void* data)
+static void xdg_toplevel_request_maximize(struct wl_listener* listener, void* data)
 {
 	/*This event is raised when a client would like to maximize itself,
 	*  typically because the user clicked on the maximize button on
@@ -850,8 +840,7 @@ static void xdg_toplevel_request_maximize(
 	wlr_xdg_surface_schedule_configure(window->xdg_toplevel->base);
 }
 
-static void xdg_toplevel_request_fullscreen(
-	struct wl_listener* listener, void* data)
+static void xdg_toplevel_request_fullscreen(struct wl_listener* listener, void* data)
 {
 	/*Just as with request_maximize, we must send a configure here.*/
 	class eshywm_window* window =
@@ -996,7 +985,6 @@ int main(int argc, char* argv[])
 
 	/*Configure a listener to be notified when new outputs are available on the
 	*  backend.*/
-	wl_list_init(&server->outputs);
 	server->new_output.notify = server_new_output;
 	wl_signal_add(&server->backend->events.new_output, &server->new_output);
 
@@ -1015,7 +1003,6 @@ int main(int argc, char* argv[])
 	* 
 	*  https://drewdevault.com/2018/07/29/Wayland-shells.html
 	*/
-	wl_list_init(&server->windows);
 	server->xdg_shell = wlr_xdg_shell_create(server->wl_display, 3);
 	server->new_xdg_surface.notify = server_new_xdg_surface;
 	wl_signal_add(&server->xdg_shell->events.new_surface,
@@ -1065,7 +1052,6 @@ int main(int argc, char* argv[])
 	*  pointer, touch, and drawing tablet device. We also rig up a listener to
 	*  let us know when new input devices are available on the backend.
 	*/
-	wl_list_init(&server->keyboards);
 	server->new_input.notify = server_new_input;
 	wl_signal_add(&server->backend->events.new_input, &server->new_input);
 	server->seat = wlr_seat_create(server->wl_display, "seat0");
