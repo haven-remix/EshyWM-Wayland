@@ -1,6 +1,7 @@
 
 #include "window.h"
 #include "eshywm.h"
+#include "util.h"
 
 static void xdg_toplevel_map(struct wl_listener* listener, void* data);
 static void xdg_toplevel_unmap(struct wl_listener* listener, void* data);
@@ -18,23 +19,15 @@ void eshywm_window::initialize(wlr_xdg_surface *xdg_surface)
 	xdg_surface->data = scene_tree;
 
 	/*Listen to the various events it can emit*/
-	map.notify = xdg_toplevel_map;
-	wl_signal_add(&xdg_surface->surface->events.map, &map);
-	unmap.notify = xdg_toplevel_unmap;
-	wl_signal_add(&xdg_surface->surface->events.unmap, &unmap);
-	destroy.notify = xdg_toplevel_destroy;
-	wl_signal_add(&xdg_surface->events.destroy, &destroy);
+	add_listener(&map, xdg_toplevel_map, &xdg_surface->surface->events.map);
+	add_listener(&unmap, xdg_toplevel_unmap, &xdg_surface->surface->events.unmap);
+	add_listener(&destroy, xdg_toplevel_destroy, &xdg_surface->events.destroy);
 
-	/*cotd*/
 	struct wlr_xdg_toplevel* toplevel = xdg_surface->toplevel;
-	request_move.notify = xdg_toplevel_request_move;
-	wl_signal_add(&toplevel->events.request_move, &request_move);
-	request_resize.notify = xdg_toplevel_request_resize;
-	wl_signal_add(&toplevel->events.request_resize, &request_resize);
-	request_maximize.notify = xdg_toplevel_request_maximize;
-	wl_signal_add(&toplevel->events.request_maximize, &request_maximize);
-	request_fullscreen.notify = xdg_toplevel_request_fullscreen;
-	wl_signal_add(&toplevel->events.request_fullscreen, &request_fullscreen);
+	add_listener(&request_move, xdg_toplevel_request_move, &toplevel->events.request_move);
+	add_listener(&request_resize, xdg_toplevel_request_resize, &toplevel->events.request_resize);
+	add_listener(&request_maximize, xdg_toplevel_request_maximize, &toplevel->events.request_maximize);
+	add_listener(&request_fullscreen, xdg_toplevel_request_fullscreen, &toplevel->events.request_fullscreen);
 }
 
 void eshywm_window::focus_window(struct wlr_surface *surface)
@@ -55,6 +48,8 @@ void eshywm_window::focus_window(struct wlr_surface *surface)
 	}
 
 	struct wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat);
+
+	server->focused_window = this;
 	
 	//Move the window to the front
 	wlr_scene_node_raise_to_top(&scene_tree->node);
@@ -80,7 +75,7 @@ void eshywm_window::begin_interactive(enum eshywm_cursor_mode mode, uint32_t edg
 	if (xdg_toplevel->base->surface != wlr_surface_get_root_surface(focused_surface))
 		return;
 
-	server->grabbed_window = this;
+	server->focused_window = this;
 	server->cursor_mode = mode;
 
 	if (mode == ESHYWM_CURSOR_MOVE)
@@ -95,8 +90,8 @@ void eshywm_window::begin_interactive(enum eshywm_cursor_mode mode, uint32_t edg
 
 		double border_x = (scene_tree->node.x + geo_box.x) + ((edges & WLR_EDGE_RIGHT) ? geo_box.width : 0);
 		double border_y = (scene_tree->node.y + geo_box.y) + ((edges & WLR_EDGE_BOTTOM) ? geo_box.height : 0);
-		server->grab_x = server->cursor->x - border_x;
-		server->grab_y = server->cursor->y - border_y;
+		server->grab_x = server->cursor->x - (edges == 0 ? 0 : border_x);
+		server->grab_y = server->cursor->y - (edges == 0 ? 0 : border_y);
 
 		server->grab_geobox = geo_box;
 		server->grab_geobox.x += scene_tree->node.x;
@@ -108,22 +103,19 @@ void eshywm_window::begin_interactive(enum eshywm_cursor_mode mode, uint32_t edg
 
 void eshywm_window::process_cursor_move(uint32_t time)
 {
-	/*Move the grabbed window to the new position.*/
 	wlr_scene_node_set_position(&scene_tree->node, server->cursor->x - server->grab_x, server->cursor->y - server->grab_y);
 }
 
 void eshywm_window::process_cursor_resize(uint32_t time)
 {
-	/*
-	*  Resizing the grabbed window can be a little bit complicated, because we
-	*  could be resizing from any corner or edge. This not only resizes the window
-	*  on one or two axes, but can also move the window if you resize from the top
-	*  or left edges (or top-left corner).
-	* 
-	*  Note that I took some shortcuts here. In a more fleshed-out compositor,
-	*  you'd wait for the client to prepare a buffer at the new size, then
-	*  commit any movement that was prepared.
-	*/
+	if(server->resize_edges == 0)
+	{
+		const int new_width = server->grab_geobox.width + (server->cursor->x - server->grab_x);
+		const int new_height = server->grab_geobox.height + (server->cursor->y - server->grab_y);
+		wlr_xdg_toplevel_set_size(xdg_toplevel, new_width, new_height);
+		return;
+	}
+
 	double border_x = server->cursor->x - server->grab_x;
 	double border_y = server->cursor->y - server->grab_y;
 	int new_left = server->grab_geobox.x;
@@ -135,33 +127,25 @@ void eshywm_window::process_cursor_resize(uint32_t time)
 	{
 		new_top = border_y;
 		if (new_top >= new_bottom)
-		{
 			new_top = new_bottom - 1;
-		}
 	}
 	else if (server->resize_edges & WLR_EDGE_BOTTOM)
 	{
 		new_bottom = border_y;
 		if (new_bottom <= new_top)
-		{
 			new_bottom = new_top + 1;
-		}
 	}
 	if (server->resize_edges & WLR_EDGE_LEFT)
 	{
 		new_left = border_x;
 		if (new_left >= new_right)
-		{
 			new_left = new_right - 1;
-		}
 	}
 	else if (server->resize_edges & WLR_EDGE_RIGHT)
 	{
 		new_right = border_x;
 		if (new_right <= new_left)
-		{
 			new_right = new_left + 1;
-		}
 	}
 
 	struct wlr_box geo_box;
@@ -189,7 +173,7 @@ void xdg_toplevel_unmap(struct wl_listener* listener, void* data)
 	class eshywm_window* window = wl_container_of(listener, window, unmap);
 
 	/*Reset the cursor mode if the grabbed window was unmapped.*/
-	if (window == server->grabbed_window)
+	if (window == server->focused_window)
 	{
 		server->reset_cursor_mode();
 	}

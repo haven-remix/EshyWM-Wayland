@@ -67,6 +67,11 @@ class eshywm_keyboard
 {
 public:
 
+	eshywm_keyboard() {}
+	eshywm_keyboard(struct wlr_keyboard* _wlr_keyboard)
+		: wlr_keyboard(_wlr_keyboard)
+	{}
+
 	struct wlr_keyboard* wlr_keyboard;
 
 	struct wl_listener modifiers;

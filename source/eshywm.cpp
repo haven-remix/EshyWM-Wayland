@@ -71,29 +71,22 @@ void output_destroy(struct wl_listener* listener, void* data)
 
 void keyboard_handle_modifiers(struct wl_listener* listener, void* data)
 {
-	/*This event is raised when a modifier key, such as shift or alt, is
-	*  pressed. We simply communicate this to the client.*/
 	class eshywm_keyboard* keyboard = wl_container_of(listener, keyboard, modifiers);
-	/*
-	*  A seat can only have one keyboard, but this is a limitation of the
-	*  Wayland protocol - not wlroots. We assign all connected keyboards to the
-	*  same seat. You can swap out the underlying wlr_keyboard like this and
-	*  wlr_seat handles this transparently.
-	*/
+	struct wlr_keyboard_key_event* event = (wlr_keyboard_key_event* )data;
+
 	wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
-	/*Send modifiers to the client.*/
 	wlr_seat_keyboard_notify_modifiers(server->seat, &keyboard->wlr_keyboard->modifiers);
+
+	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
+	server->b_window_modifier_key_pressed = modifiers & WLR_MODIFIER_LOGO;
+
+	if(!server->b_window_modifier_key_pressed)
+		server->reset_cursor_mode();
 }
 
 bool handle_keybinding(xkb_keysym_t sym)
 {
-	/*
-	*  Here we handle compositor keybindings. This is when the compositor is
-	*  processing keys, rather than passing them on to the client for its own
-	*  processing.
-	* 
-	*  This function assumes Alt is held down.
-	*/
+	//This function assumes super is held down
 	switch (sym)
 	{
 	case XKB_KEY_Escape:

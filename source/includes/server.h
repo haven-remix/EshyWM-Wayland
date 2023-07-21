@@ -52,6 +52,10 @@ class eshywm_server
 {
 public:
 
+	eshywm_server()
+		: b_window_modifier_key_pressed(false)
+	{}
+
 	struct wl_display* wl_display;
 	struct wlr_backend* backend;
 	struct wlr_renderer* renderer;
@@ -76,10 +80,12 @@ public:
 	struct wl_listener request_set_selection;
 	std::vector<class eshywm_keyboard*> keyboard_list;
 	enum eshywm_cursor_mode cursor_mode;
-	class eshywm_window* grabbed_window;
-	double grab_x, grab_y;
+	class eshywm_window* focused_window;
+	double grab_x;
+	double grab_y;
 	struct wlr_box grab_geobox;
 	uint32_t resize_edges;
+	bool b_window_modifier_key_pressed;
 
 	struct wlr_output_layout* output_layout;
 	std::vector<class eshywm_output*> output_list;

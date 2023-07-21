@@ -4,6 +4,8 @@
 #include "window.h"
 #include "util.h"
 
+#include <linux/input-event-codes.h>
+
 static void server_new_keyboard(struct wlr_input_device* device);
 static void server_new_input(struct wl_listener* listener, void* data);
 static void server_cursor_motion(struct wl_listener* listener, void* data);
@@ -35,16 +37,13 @@ void eshywm_server::initialize()
 	wlr_data_device_manager_create(wl_display);
 
 	output_layout = wlr_output_layout_create();
-
-	new_output.notify = server_new_output;
-	wl_signal_add(&backend->events.new_output, &new_output);
+	add_listener(&new_output, server_new_output, &backend->events.new_output);
 
 	scene = wlr_scene_create();
 	wlr_scene_attach_output_layout(scene, output_layout);
 
 	xdg_shell = wlr_xdg_shell_create(wl_display, 3);
-	new_xdg_surface.notify = server_new_xdg_surface;
-	wl_signal_add(&xdg_shell->events.new_surface, &new_xdg_surface);
+	add_listener(&new_xdg_surface, server_new_xdg_surface, &xdg_shell->events.new_surface);
 
 	cursor = wlr_cursor_create();
 	wlr_cursor_attach_output_layout(cursor, output_layout);
@@ -52,24 +51,16 @@ void eshywm_server::initialize()
 	cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
 
 	cursor_mode = ESHYWM_CURSOR_PASSTHROUGH;
-	cursor_motion.notify = server_cursor_motion;
-	wl_signal_add(&cursor->events.motion, &cursor_motion);
-	cursor_motion_absolute.notify = server_cursor_motion_absolute;
-	wl_signal_add(&cursor->events.motion_absolute,&cursor_motion_absolute);
-	cursor_button.notify = server_cursor_button;
-	wl_signal_add(&cursor->events.button, &cursor_button);
-	cursor_axis.notify = server_cursor_axis;
-	wl_signal_add(&cursor->events.axis, &cursor_axis);
-	cursor_frame.notify = server_cursor_frame;
-	wl_signal_add(&cursor->events.frame, &cursor_frame);
+	add_listener(&cursor_motion, server_cursor_motion, &cursor->events.motion);
+	add_listener(&cursor_motion_absolute, server_cursor_motion_absolute, &cursor->events.motion_absolute);
+	add_listener(&cursor_button, server_cursor_button, &cursor->events.button);
+	add_listener(&cursor_axis, server_cursor_axis, &cursor->events.axis);
+	add_listener(&cursor_frame, server_cursor_frame, &cursor->events.frame);
 
-	new_input.notify = server_new_input;
-	wl_signal_add(&backend->events.new_input, &new_input);
+	add_listener(&new_input, server_new_input, &backend->events.new_input);
 	seat = wlr_seat_create(wl_display, "seat0");
-	request_cursor.notify = seat_request_cursor;
-	wl_signal_add(&seat->events.request_set_cursor, &request_cursor);
-	request_set_selection.notify = seat_request_set_selection;
-	wl_signal_add(&seat->events.request_set_selection, &request_set_selection);
+	add_listener(&request_cursor, seat_request_cursor, &seat->events.request_set_cursor);
+	add_listener(&request_set_selection, seat_request_set_selection, &seat->events.request_set_selection);
 }
 
 void eshywm_server::run_display(char* startup_cmd)
@@ -109,9 +100,8 @@ void eshywm_server::shutdown()
 
 void eshywm_server::reset_cursor_mode()
 {
-	/*Reset the cursor mode to passthrough.*/
 	cursor_mode = ESHYWM_CURSOR_PASSTHROUGH;
-	grabbed_window = NULL;
+	focused_window = NULL;
 }
 
 
@@ -119,8 +109,7 @@ void server_new_keyboard(struct wlr_input_device* device)
 {
 	struct wlr_keyboard* wlr_keyboard = wlr_keyboard_from_input_device(device);
 
-	eshywm_keyboard* keyboard = new eshywm_keyboard;
-	keyboard->wlr_keyboard = wlr_keyboard;
+	eshywm_keyboard* keyboard = new eshywm_keyboard(wlr_keyboard);
 
 	/*We need to prepare an XKB keymap and assign it to the keyboard. This
 	*  assumes the defaults (e.g. layout = "us").*/
@@ -133,12 +122,9 @@ void server_new_keyboard(struct wlr_input_device* device)
 	wlr_keyboard_set_repeat_info(wlr_keyboard, 25, 600);
 
 	/*Here we set up listeners for keyboard events.*/
-	keyboard->modifiers.notify = keyboard_handle_modifiers;
-	wl_signal_add(&wlr_keyboard->events.modifiers, &keyboard->modifiers);
-	keyboard->key.notify = keyboard_handle_key;
-	wl_signal_add(&wlr_keyboard->events.key, &keyboard->key);
-	keyboard->destroy.notify = keyboard_handle_destroy;
-	wl_signal_add(&device->events.destroy, &keyboard->destroy);
+	add_listener(&keyboard->modifiers, keyboard_handle_modifiers, &wlr_keyboard->events.modifiers);
+	add_listener(&keyboard->key, keyboard_handle_key, &wlr_keyboard->events.key);
+	add_listener(&keyboard->destroy, keyboard_handle_destroy, &device->events.destroy);
 
 	wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
 
@@ -181,28 +167,16 @@ void server_new_input(struct wl_listener* listener, void* data)
 	wlr_seat_set_capabilities(server->seat, caps);
 }
 
+
 void server_cursor_motion(struct wl_listener* listener, void* data)
 {
-	/*This event is forwarded by the cursor when a pointer emits a _relative_
-	*  pointer motion event (i.e. a delta)*/
 	struct wlr_pointer_motion_event* event = (wlr_pointer_motion_event*)data;
-	/*The cursor doesn't move unless we tell it to. The cursor automatically
-	*  handles constraining the motion to the output layout, as well as any
-	*  special configuration applied for the specific input device which
-	*  generated the event. You can pass NULL for the device if you want to move
-	*  the cursor around without any input.*/
 	wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
 	process_cursor_motion(event->time_msec);
 }
 
 void server_cursor_motion_absolute(struct wl_listener* listener, void* data)
 {
-	/*This event is forwarded by the cursor when a pointer emits an _absolute_
-	*  motion event, from 0..1 on each axis. This happens, for example, when
-	*  wlroots is running under a Wayland window rather than KMS+DRM, and you
-	*  move the mouse over the window. You could enter the window from any edge,
-	*  so we have to warp the mouse there. There is also some hardware which
-	*  emits these events.*/
 	struct wlr_pointer_motion_absolute_event* event = (wlr_pointer_motion_absolute_event*)data;
 	wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
 	process_cursor_motion(event->time_msec);
@@ -210,43 +184,42 @@ void server_cursor_motion_absolute(struct wl_listener* listener, void* data)
 
 void server_cursor_button(struct wl_listener* listener, void* data)
 {
-	/*This event is forwarded by the cursor when a pointer emits a button
-	*  event.*/
 	struct wlr_pointer_button_event* event = (wlr_pointer_button_event*)data;
-	/*Notify the client with pointer focus that a button press has occurred*/
+
 	wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button, event->state);
-	double sx, sy;
+	double sx;
+	double sy;
 	struct wlr_surface* surface = NULL;
 	eshywm_window* window = desktop_window_at(server->cursor->x, server->cursor->y, &surface, &sx, &sy);
 
 	if (event->state == WLR_BUTTON_RELEASED)
-	{
-		/*If you released any buttons, we exit interactive move/resize mode.*/
 		server->reset_cursor_mode();
-	}
 	else
-	{
-		/*Focus that client if the button was _pressed_*/
 		window->focus_window(surface);
+
+	if(server->b_window_modifier_key_pressed && event->state == WLR_BUTTON_PRESSED)
+	{
+		if (event->button == BTN_LEFT)
+		{
+			window->begin_interactive(ESHYWM_CURSOR_MOVE, 0);
+			return;
+		}
+		else if (event->button == BTN_RIGHT)
+		{
+			window->begin_interactive(ESHYWM_CURSOR_RESIZE, 0);
+			return;
+		}
 	}
 }
 
 void server_cursor_axis(struct wl_listener* listener, void* data)
 {
-	/*This event is forwarded by the cursor when a pointer emits an axis event,
-	*  for example when you move the scroll wheel.*/
 	struct wlr_pointer_axis_event* event = (wlr_pointer_axis_event*)data;
-	/*Notify the client with pointer focus of the axis event.*/
 	wlr_seat_pointer_notify_axis(server->seat, event->time_msec, event->orientation, event->delta, event->delta_discrete, event->source);
 }
 
 void server_cursor_frame(struct wl_listener* listener, void* data)
 {
-	/*This event is forwarded by the cursor when a pointer emits an frame
-	*  event. Frame events are sent after regular pointer events to group
-	*  multiple events together. For instance, two axis events may happen at the
-	*  same time, in which case a frame event won't be sent in between.*/
-	/*Notify the client with pointer focus of the frame event.*/
 	wlr_seat_pointer_notify_frame(server->seat);
 }
 
@@ -284,17 +257,9 @@ void server_new_output(struct wl_listener* listener, void* data)
 	eshywm_output* output = new eshywm_output;
 	output->wlr_output = wlr_output;
 
-	/*Sets up a listener for the frame event.*/
-	output->frame.notify = output_frame;
-	wl_signal_add(&wlr_output->events.frame, &output->frame);
-
-	/*Sets up a listener for the state request event.*/
-	output->request_state.notify = output_request_state;
-	wl_signal_add(&wlr_output->events.request_state, &output->request_state);
-
-	/*Sets up a listener for the destroy event.*/
-	output->destroy.notify = output_destroy;
-	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+	add_listener(&output->frame, output_frame, &wlr_output->events.frame);
+	add_listener(&output->request_state, output_request_state, &wlr_output->events.request_state);
+	add_listener(&output->destroy, output_destroy, &wlr_output->events.destroy);
 
 	server->output_list.push_back(output);
 
@@ -341,12 +306,12 @@ void process_cursor_motion(uint32_t time)
 	/*If the mode is non-passthrough, delegate to those functions.*/
 	if (server->cursor_mode == ESHYWM_CURSOR_MOVE)
 	{
-		server->grabbed_window->process_cursor_move(time);
+		server->focused_window->process_cursor_move(time);
 		return;
 	}
 	else if (server->cursor_mode == ESHYWM_CURSOR_RESIZE)
 	{
-		server->grabbed_window->process_cursor_resize(time);
+		server->focused_window->process_cursor_resize(time);
 		return;
 	}
 
