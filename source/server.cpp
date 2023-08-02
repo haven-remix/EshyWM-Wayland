@@ -4,6 +4,8 @@
 #include "window.h"
 #include "util.h"
 
+#include <wayland-client.h>
+
 #include <linux/input-event-codes.h>
 
 static void server_new_keyboard(struct wlr_input_device* device);
@@ -83,7 +85,7 @@ void eshywm_server::run_display(char* startup_cmd)
 	setenv("WAYLAND_DISPLAY", socket, true);
 	if (startup_cmd && fork() == 0)
 		execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void* )NULL);
-
+	
 	wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s", socket);
 	wl_display_run(wl_display);
 }
@@ -98,10 +100,15 @@ void eshywm_server::shutdown()
 }
 
 
+void eshywm_server::close_window(eshywm_window* window)
+{
+	wlr_xdg_toplevel_send_close(window->xdg_toplevel);
+}
+
+
 void eshywm_server::reset_cursor_mode()
 {
 	cursor_mode = ESHYWM_CURSOR_PASSTHROUGH;
-	focused_window = NULL;
 }
 
 
@@ -277,15 +284,8 @@ void server_new_output(struct wl_listener* listener, void* data)
 
 void server_new_xdg_surface(struct wl_listener* listener, void* data)
 {
-	/*This event is raised when wlr_xdg_shell receives a new xdg surface from a
-	*  client, either a toplevel (application window) or popup.*/
 	struct wlr_xdg_surface* xdg_surface = (wlr_xdg_surface*)data;
 
-	/*We must add xdg popups to the scene graph so they get rendered. The
-	*  wlroots scene graph provides a helper for this, but to use it we must
-	*  provide the proper parent scene node of the xdg popup. To enable this,
-	*  we always set the user data field of xdg_surfaces to the corresponding
-	*  scene node.*/
 	if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_POPUP)
 	{
 		struct wlr_xdg_surface* parent = wlr_xdg_surface_try_from_wlr_surface(xdg_surface->popup->parent);
@@ -297,7 +297,7 @@ void server_new_xdg_surface(struct wl_listener* listener, void* data)
 	{
 		eshywm_window* window = new eshywm_window;
 		window->initialize(xdg_surface);
-	}	
+	}
 }
 
 

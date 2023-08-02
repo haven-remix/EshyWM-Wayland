@@ -99,6 +99,9 @@ void eshywm_window::begin_interactive(enum eshywm_cursor_mode mode, uint32_t edg
 
 		server->resize_edges = edges;
 	}
+
+	fullscreen_window(false);
+	maximize_window(false);
 }
 
 void eshywm_window::process_cursor_move(uint32_t time)
@@ -157,6 +160,68 @@ void eshywm_window::process_cursor_resize(uint32_t time)
 	wlr_xdg_toplevel_set_size(xdg_toplevel, new_width, new_height);
 }
 
+void eshywm_window::fullscreen_window(bool b_fullscreen)
+{
+	if (b_fullscreen)
+	{
+		if(window_state != ESHYWM_WINDOW_STATE_MAXIMIZED && window_state != ESHYWM_WINDOW_STATE_FULLSCREEN)
+		{
+			struct wlr_box geo_box;
+			wlr_xdg_surface_get_geometry(xdg_toplevel->base, &geo_box);
+			saved_geo = geo_box;
+			saved_geo.x += scene_tree->node.x;
+			saved_geo.y += scene_tree->node.y;
+		}
+		
+		int width;
+		int height;
+		wlr_output_effective_resolution(server->output_list[0]->wlr_output, &width, &height);
+
+		wlr_xdg_toplevel_set_size(xdg_toplevel, width, height);
+		wlr_scene_node_set_position(&scene_tree->node, 0, 0);
+
+		window_state = ESHYWM_WINDOW_STATE_FULLSCREEN;
+	}
+	else if (window_state == ESHYWM_WINDOW_STATE_FULLSCREEN)
+	{
+		wlr_xdg_toplevel_set_size(xdg_toplevel, saved_geo.width, saved_geo.height);
+		wlr_scene_node_set_position(&scene_tree->node, saved_geo.x, saved_geo.y);
+
+		window_state = ESHYWM_WINDOW_STATE_NORMAL;
+	}
+}
+
+void eshywm_window::maximize_window(bool b_maximize)
+{
+	if (b_maximize)
+	{
+		if(window_state != ESHYWM_WINDOW_STATE_MAXIMIZED && window_state != ESHYWM_WINDOW_STATE_FULLSCREEN)
+		{
+			struct wlr_box geo_box;
+			wlr_xdg_surface_get_geometry(xdg_toplevel->base, &geo_box);
+			saved_geo = geo_box;
+			saved_geo.x += scene_tree->node.x;
+			saved_geo.y += scene_tree->node.y;
+		}
+
+		int width;
+		int height;
+		wlr_output_effective_resolution(server->output_list[0]->wlr_output, &width, &height);
+
+		wlr_xdg_toplevel_set_size(xdg_toplevel, width, height);
+		wlr_scene_node_set_position(&scene_tree->node, 0, 0);
+
+		window_state = ESHYWM_WINDOW_STATE_MAXIMIZED;
+	}
+	else if (window_state == ESHYWM_WINDOW_STATE_MAXIMIZED)
+	{
+		wlr_xdg_toplevel_set_size(xdg_toplevel, saved_geo.width, saved_geo.height);
+		wlr_scene_node_set_position(&scene_tree->node, saved_geo.x, saved_geo.y);
+
+		window_state = ESHYWM_WINDOW_STATE_NORMAL;
+	}
+}
+
 void xdg_toplevel_map(struct wl_listener* listener, void* data)
 {
 	/*Called when the surface is mapped, or ready to display on-screen.*/
@@ -176,13 +241,14 @@ void xdg_toplevel_unmap(struct wl_listener* listener, void* data)
 	if (window == server->focused_window)
 	{
 		server->reset_cursor_mode();
+		server->focused_window = nullptr;
 	}
 
-	//auto pos = std::find(server->window_list.begin(), server->window_list.end(), window);
-	//if(pos != server->window_list.end())
-	//{
-	//	//server->window_list.erase(server->window_list.begin() + std::distance(server->window_list.begin(), pos));
-	//}
+	auto pos = std::find(server->window_list.begin(), server->window_list.end(), window);
+	if(pos != server->window_list.end())
+	{
+		server->window_list.erase(server->window_list.begin() + std::distance(server->window_list.begin(), pos));
+	}
 }
 
 void xdg_toplevel_destroy(struct wl_listener* listener, void* data)

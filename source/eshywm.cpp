@@ -1,7 +1,10 @@
 
 #include "eshywm.h"
 #include "server.h"
+#include "window.h"
 #include "util.h"
+
+#include <wayland-client-core.h>
 
 eshywm_server* server = nullptr;
 
@@ -71,14 +74,15 @@ void output_destroy(struct wl_listener* listener, void* data)
 
 void keyboard_handle_modifiers(struct wl_listener* listener, void* data)
 {
-	class eshywm_keyboard* keyboard = wl_container_of(listener, keyboard, modifiers);
-	struct wlr_keyboard_key_event* event = (wlr_keyboard_key_event* )data;
+	const eshywm_keyboard* keyboard = wl_container_of(listener, keyboard, modifiers);
 
 	wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
 	wlr_seat_keyboard_notify_modifiers(server->seat, &keyboard->wlr_keyboard->modifiers);
 
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
-	server->b_window_modifier_key_pressed = modifiers & WLR_MODIFIER_LOGO;
+
+	//Window modifier
+	server->b_window_modifier_key_pressed = modifiers & WLR_MODIFIER_LOGO ? server->b_window_modifier_key_pressed : false;
 
 	if(!server->b_window_modifier_key_pressed)
 		server->reset_cursor_mode();
@@ -92,17 +96,27 @@ bool handle_keybinding(xkb_keysym_t sym)
 	case XKB_KEY_Escape:
 		wl_display_terminate(server->wl_display);
 		break;
-	case XKB_KEY_F1:
+	case XKB_KEY_j:
 	{
-		/*Cycle to the next window*/
-		// if (wl_list_length(&server->windows) < 2)
-		// {
-		// 	break;
-		// }
-		// class eshywm_window* next_window = (eshywm_window*)wl_container_of(server->windows.prev, next_window, link);
-		// focus_window(next_window, next_window->xdg_toplevel->base->surface);
+		if (server->focused_window)
+			server->focused_window->toggle_maximize();
 		break;
 	}
+	case XKB_KEY_k:
+	{
+		if (server->focused_window)
+			server->focused_window->toggle_fullscreen();
+		break;
+	}
+	case XKB_KEY_n:
+	{
+		if (server->focused_window)
+			server->close_window(server->focused_window);
+		break;
+	}
+	case XKB_KEY_r:
+		system("wofi --show drun --fork --allow-images");
+		break;
 	default:
 		return false;
 	}
@@ -111,32 +125,67 @@ bool handle_keybinding(xkb_keysym_t sym)
 
 void keyboard_handle_key(struct wl_listener* listener, void* data)
 {
-	/*This event is raised when a key is pressed or released.*/
-	class eshywm_keyboard* keyboard = wl_container_of(listener, keyboard, key);
-	struct wlr_keyboard_key_event* event = (wlr_keyboard_key_event* )data;
+	const eshywm_keyboard* keyboard = wl_container_of(listener, keyboard, key);
+	const struct wlr_keyboard_key_event* event = (wlr_keyboard_key_event* )data;
 	struct wlr_seat* seat = server->seat;
 
-	/*Translate libinput keycode -> xkbcommon*/
+	//Translate libinput keycode -> xkbcommon
 	uint32_t keycode = event->keycode + 8;
-	/*Get a list of keysyms based on the keymap for this keyboard*/
+	//Get a list of keysyms based on the keymap for this keyboard
 	const xkb_keysym_t* syms;
 	int nsyms = xkb_state_key_get_syms(keyboard->wlr_keyboard->xkb_state, keycode, &syms);
 
 	bool handled = false;
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
-	if ((modifiers & WLR_MODIFIER_ALT) && event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
-	{
-		/*If alt is held down and this button was _pressed_, we attempt to
-		*  process it as a compositor keybinding.*/
+	if ((modifiers & WLR_MODIFIER_LOGO) && event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
 		for (int i = 0; i < nsyms; i++)
-		{
 			handled = handle_keybinding(syms[i]);
-		}
+	
+	//Window modifier
+	if (!handled && modifiers & WLR_MODIFIER_LOGO)
+		for (int i = 0; i < nsyms; i++)
+			if (syms[i] == XKB_KEY_Control_L && event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
+			{
+				server->b_window_modifier_key_pressed = true;
+				handled = true;
+				break;
+			}
+			else if (syms[i] == XKB_KEY_Control_L && event->state == WL_KEYBOARD_KEY_STATE_RELEASED)
+			{
+				server->b_window_modifier_key_pressed = false;
+				handled = true;
+				break;
+			}
+
+	//Window switching
+	if (!handled && (modifiers & WLR_MODIFIER_ALT) && event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
+	{
+		for (int i = 0; i < nsyms; i++)
+			if (syms[i] == XKB_KEY_Tab)
+			{				
+				server->next_window_index++;
+				if (server->next_window_index > server->window_list.size() - 1)
+					server->next_window_index = 0;
+
+				handled = true;
+				break;
+			}
+	}
+	else if (!handled && event->state == WL_KEYBOARD_KEY_STATE_RELEASED)
+	{
+		for (int i = 0; i < nsyms; i++)
+			if (syms[i] == XKB_KEY_Alt_L)
+			{				
+				eshywm_window* next_window = server->window_list[server->next_window_index];
+				next_window->focus_window(next_window->xdg_toplevel->base->surface);
+				server->next_window_index = 0;
+				handled = true;
+				break;
+			}
 	}
 
 	if (!handled)
 	{
-		/*Otherwise, we pass it along to the client.*/
 		wlr_seat_set_keyboard(seat, keyboard->wlr_keyboard);
 		wlr_seat_keyboard_notify_key(seat, event->time_msec, event->keycode, event->state);
 	}

@@ -54,6 +54,8 @@ public:
 
 	eshywm_server()
 		: b_window_modifier_key_pressed(false)
+		, b_window_switch_key_pressed(false)
+		, next_window_index(0)
 	{}
 
 	struct wl_display* wl_display;
@@ -86,6 +88,8 @@ public:
 	struct wlr_box grab_geobox;
 	uint32_t resize_edges;
 	bool b_window_modifier_key_pressed;
+	bool b_window_switch_key_pressed;
+	uint next_window_index;
 
 	struct wlr_output_layout* output_layout;
 	std::vector<class eshywm_output*> output_list;
@@ -94,6 +98,8 @@ public:
     void initialize();
     void run_display(char* startup_cmd);
     void shutdown();
+
+	void close_window(eshywm_window* window);
 
     void reset_cursor_mode();
 };
