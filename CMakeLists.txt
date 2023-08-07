@@ -43,29 +43,50 @@ target_compile_definitions(eshywm PRIVATE -D__WAYLAND_INTERNAL_API)
 # Fix invalid conversion from ‘void (*)(wl_listener*, void*)’ to ‘wl_notify_func_t’ error
 target_link_libraries(eshywm PRIVATE wayland-server)
 
+
+
+
+# --------------- ESHYUI -----------------
+
+project(EshyUI)
+
+# Find required packages
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
+pkg_check_modules(GLEW REQUIRED IMPORTED_TARGET glew)
+
+# Set source files
+set(ESHYUI_SOURCE_FILES EshyUI.cpp Renderer.cpp Entity.cpp IndexBuffer.cpp Shader.cpp Texture.cpp VertexArray.cpp VertexBuffer.cpp stb/stb_image.cpp)
+list(TRANSFORM ESHYUI_SOURCE_FILES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/EshyUI/Source/)
+
+add_library(EshyUI STATIC ${ESHYUI_SOURCE_FILES})
+target_compile_options(EshyUI PRIVATE -g -Werror -DWLR_USE_UNSTABLE)
+target_include_directories(EshyUI PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/EshyUI/Source)
+target_link_libraries(EshyUI PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/EshyUI/EshyUI.lib PkgConfig::GLFW PkgConfig::GLEW)
+
+# Fix function pointer type mismatch for wl_listener
+target_compile_definitions(EshyUI PRIVATE -D__WAYLAND_INTERNAL_API)
+
+
+
+
 # --------------- ESHYBAR -----------------
 
 project(eshybar)
 
 # Find required packages
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client++)
-pkg_check_modules(WAYLAND_CLIENT_EXTRA REQUIRED IMPORTED_TARGET wayland-client-extra++)
-pkg_check_modules(WAYLAND_CURSOR REQUIRED IMPORTED_TARGET wayland-cursor++)
-pkg_check_modules(WAYLAND_EGL REQUIRED IMPORTED_TARGET wayland-egl++)
-pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
-pkg_check_modules(GLESV2 REQUIRED IMPORTED_TARGET glesv2)
 pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
 pkg_check_modules(GLEW REQUIRED IMPORTED_TARGET glew)
 
 # Set source files
-set(ESHYBAR_SOURCE_FILES eshybar.cpp eshyui.cpp /includes/stb_image.cpp)
+set(ESHYBAR_SOURCE_FILES eshybar.cpp)
 list(TRANSFORM ESHYBAR_SOURCE_FILES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/source_eshybar/)
 
 add_executable(eshybar ${ESHYBAR_SOURCE_FILES})
 target_compile_options(eshybar PRIVATE -g -Werror -DWLR_USE_UNSTABLE)
-target_include_directories(eshybar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/source_eshybar/includes)
-target_link_libraries(eshybar PRIVATE PkgConfig::GLFW PkgConfig::GLEW PkgConfig::WAYLAND_EGL PkgConfig::WAYLAND_CLIENT PkgConfig::WAYLAND_CLIENT_EXTRA PkgConfig::WAYLAND_CURSOR PkgConfig::EGL PkgConfig::GLESV2)
+target_include_directories(eshybar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/source_eshybar/includes ${CMAKE_CURRENT_SOURCE_DIR}/EshyUI/Source)
+target_link_libraries(eshybar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/build/libEshyUI.a PkgConfig::GLFW PkgConfig::GLEW)
 
 # Fix function pointer type mismatch for wl_listener
 target_compile_definitions(eshybar PRIVATE -D__WAYLAND_INTERNAL_API)
