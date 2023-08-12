@@ -41,18 +41,22 @@ extern "C"
 
 #include <xkbcommon/xkbcommon.h>
 
-enum eshywm_cursor_mode
+#include <nlohmann/json.hpp>
+
+extern class EshyWMServer* Server;
+
+enum EshyWMCursorMode
 {
 	ESHYWM_CURSOR_PASSTHROUGH,
 	ESHYWM_CURSOR_MOVE,
 	ESHYWM_CURSOR_RESIZE,
 };
 
-class eshywm_server
+class EshyWMServer
 {
 public:
 
-	eshywm_server()
+	EshyWMServer()
 		: b_window_modifier_key_pressed(false)
 		, b_window_switch_key_pressed(false)
 		, next_window_index(0)
@@ -66,7 +70,7 @@ public:
 
 	struct wlr_xdg_shell* xdg_shell;
 	struct wl_listener new_xdg_surface;
-	std::vector<class eshywm_window*> window_list;
+	std::vector<class EshyWMWindow*> window_list;
 
 	struct wlr_cursor* cursor;
 	struct wlr_xcursor_manager* cursor_mgr;
@@ -80,9 +84,9 @@ public:
 	struct wl_listener new_input;
 	struct wl_listener request_cursor;
 	struct wl_listener request_set_selection;
-	std::vector<class eshywm_keyboard*> keyboard_list;
-	enum eshywm_cursor_mode cursor_mode;
-	class eshywm_window* focused_window;
+	std::vector<class EshyWMKeyboard*> keyboard_list;
+	enum EshyWMCursorMode cursor_mode;
+	class EshyWMWindow* focused_window;
 	double grab_x;
 	double grab_y;
 	struct wlr_box grab_geobox;
@@ -92,14 +96,17 @@ public:
 	uint next_window_index;
 
 	struct wlr_output_layout* output_layout;
-	std::vector<class eshywm_output*> output_list;
+	struct wl_listener output_change;
+	std::vector<class EshyWMOutput*> output_list;
 	struct wl_listener new_output;
 
-    void initialize();
-    void run_display(char* startup_cmd);
-    void shutdown();
+	class EshyWMSpecialWindow* Eshybar;
 
-	void close_window(eshywm_window* window);
+    void Initialize();
+    void BeginEventLoop(char* startup_cmd);
+    void Shutdown();
 
-    void reset_cursor_mode();
+	void CloseWindow(EshyWMWindow* window);
+
+    void ResetCursorMode();
 };

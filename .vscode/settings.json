@@ -65,6 +65,10 @@
         "variant": "cpp",
         "codecvt": "cpp",
         "fstream": "cpp",
-        "iostream": "cpp"
-    }
+        "iostream": "cpp",
+        "any": "cpp",
+        "forward_list": "cpp",
+        "ranges": "cpp"
+    },
+    "cmake.configureOnOpen": false
 }

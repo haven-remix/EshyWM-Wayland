@@ -9,6 +9,8 @@
 
 #include "glm/gtc/matrix_transform.hpp"
 
+#include <iostream>
+
 euiEntity::euiEntity(float _x, float _y, float _Width, float _Height, euiAnchor _Anchor)
 	: x(_x)
 	, y(_y)
@@ -16,6 +18,7 @@ euiEntity::euiEntity(float _x, float _y, float _Width, float _Height, euiAnchor 
 	, Height(_Height)
 	, Anchor(_Anchor)
 	, bPointerIsHovering(false)
+	, bPointerIsPressed(false)
 	, VertexArray(nullptr)
 	, VertexBuffer(nullptr)
 	, IndexBuffer(nullptr)
@@ -47,37 +50,37 @@ void euiEntity::SetSize(float NewWidth, float NewHeight)
 void euiEntity::NotifyPointerEnter()
 {
 	if (NotifyPointerEnterCallback)
-		NotifyPointerEnterCallback(this);
+		NotifyPointerEnterCallback(this, CallbackData);
 }
 
 void euiEntity::NotifyPointerExit()
 {
 	if (NotifyPointerExitCallback)
-		NotifyPointerExitCallback(this);
+		NotifyPointerExitCallback(this, CallbackData);
 }
 
 void euiEntity::NotifyPointerHover()
 {
 	if (NotifyPointerHoverCallback)
-		NotifyPointerHoverCallback(this);
+		NotifyPointerHoverCallback(this, CallbackData);
 }
 
 void euiEntity::NotifyPointerPressed()
 {
 	if (NotifyPointerPressedCallback)
-		NotifyPointerPressedCallback(this);
+		NotifyPointerPressedCallback(this, CallbackData);
 }
 
 void euiEntity::NotifyPointerUnpressed()
 {
 	if (NotifyPointerUnpressedCallback)
-		NotifyPointerUnpressedCallback(this);
+		NotifyPointerUnpressedCallback(this, CallbackData);
 }
 
 void euiEntity::NotifyPointerHeld()
 {
 	if (NotifyPointerHeldCallback)
-		NotifyPointerHeldCallback(this);
+		NotifyPointerHeldCallback(this, CallbackData);
 }
 
 void euiEntity::NotifyPointerStatus(bool bCurrentlyHovering, bool bCurrentlyPressed)

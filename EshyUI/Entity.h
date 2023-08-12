@@ -8,7 +8,7 @@
 
 class euiEntity;
 
-typedef void (*euiEntityEventCallback)(euiEntity*);
+typedef void (*euiEntityEventCallback)(euiEntity*, void*);
 
 enum euiAnchor
 {
@@ -61,6 +61,7 @@ public:
 	euiEntityEventCallback NotifyPointerPressedCallback;
 	euiEntityEventCallback NotifyPointerUnpressedCallback;
 	euiEntityEventCallback NotifyPointerHeldCallback;
+	void* CallbackData;
 
 protected:
 

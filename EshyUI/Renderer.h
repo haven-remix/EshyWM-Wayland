@@ -22,7 +22,7 @@ public:
 	void Draw(class euiEntity* Entity, const glm::vec4 Color);
 	void Draw(class euiEntity* Entity, class euiTexture* Texture = nullptr);
 
-	void UpdateScreenSize(float Width, float Height);
+	void UpdateWindowSize(float Width, float Height);
 
 	void InformBindTexture(class euiTexture* Texture, uint Slot);
 	int GetFirstUnboundTextureSlot();

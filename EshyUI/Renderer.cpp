@@ -24,7 +24,7 @@ euiRenderer::euiRenderer(GLFWwindow* _Window)
 	int Height;
 	glfwGetWindowSize(_Window, &Width, &Height);
 
-	UpdateScreenSize((float)Width, (float)Height);
+	UpdateWindowSize((float)Width, (float)Height);
 }
 
 void euiRenderer::Clear() const
@@ -75,11 +75,11 @@ void euiRenderer::Draw(euiEntity* Entity, euiTexture* Texture)
 }
 
 
-void euiRenderer::UpdateScreenSize(float Width, float Height)
+void euiRenderer::UpdateWindowSize(float Width, float Height)
 {
 	WindowWidth = Width;
 	WindowHeight = Height;
-	ProjectionMatrix = glm::ortho(0.0f, Width, 0.0f, Height, -1.0f, 1.0f);
+	ProjectionMatrix = glm::ortho(0.0f, 1024.0f, 0.0f, Height, -1.0f, 1.0f);
 	glfwSetWindowSize(Window, (int)Width, (int)Height);
 }
 
