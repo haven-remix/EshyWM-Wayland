@@ -1,17 +1,44 @@
 
 #include "Output.h"
 #include "Server.h"
+#include "EshyWM.h"
+
+#include "EshyIPC.h"
+
+#define static
+
+extern "C"
+{
+#include <wlr/types/wlr_output.h>
+#include <wlr/types/wlr_scene.h>
+}
+
+#undef static
+
+#include <string>
+#include <iostream>
+
+static eipcSharedMemory SharedMemory;
+static std::string CurrentShm;
 
 void OutputFrame(struct wl_listener* listener, void* data)
 {
 	//This function is called every time an output is ready to display a frame, generally at the output's refresh rate (e.g. 60Hz).
 	class EshyWMOutput* output = wl_container_of(listener, output, FrameListener);
-	struct wlr_scene* scene = Server->scene;
+	struct wlr_scene* scene = Server->Scene;
 
 	struct wlr_scene_output* scene_output = wlr_scene_get_scene_output(scene, output->WlrOutput);
 
+	//Only runs when shared memory changes
+	SharedMemory = EshyIPC::AttachSharedMemoryBlock(EshybarShmID);
+	if(CurrentShm != std::string(SharedMemory.Block))
+	{
+		CurrentShm = std::string(SharedMemory.Block);
+		SharedMemoryUpdated(CurrentShm);
+	}
+
 	//Render the scene if needed and commit the output
-	wlr_scene_output_commit(scene_output);
+	wlr_scene_output_commit(scene_output, nullptr);
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);

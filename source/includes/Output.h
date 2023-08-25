@@ -11,6 +11,10 @@ class EshyWMOutput
 {
 public:
 
+	EshyWMOutput(struct wlr_output* _WlrOutput)
+		: WlrOutput(_WlrOutput)
+	{}
+
 	struct wlr_output* WlrOutput;
 	struct wl_listener FrameListener;
 	struct wl_listener RequestStateListener;

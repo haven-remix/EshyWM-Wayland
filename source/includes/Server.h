@@ -1,16 +1,8 @@
 
 #pragma once
 
-#include <assert.h>
-#include <getopt.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <time.h>
-#include <unistd.h>
-#include <memory>
+#include <string>
 #include <vector>
-#include <algorithm>
 
 #include <wayland-server-core.h>
 
@@ -18,32 +10,23 @@
 
 extern "C"
 {
-#include <wlr/backend.h>
-#include <wlr/render/allocator.h>
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_cursor.h>
-#include <wlr/types/wlr_compositor.h>
-#include <wlr/types/wlr_data_device.h>
-#include <wlr/types/wlr_input_device.h>
-#include <wlr/types/wlr_keyboard.h>
-#include <wlr/types/wlr_output.h>
-#include <wlr/types/wlr_output_layout.h>
-#include <wlr/types/wlr_pointer.h>
-#include <wlr/types/wlr_scene.h>
-#include <wlr/types/wlr_seat.h>
-#include <wlr/types/wlr_subcompositor.h>
-#include <wlr/types/wlr_xcursor_manager.h>
-#include <wlr/types/wlr_xdg_shell.h>
-#include <wlr/util/log.h>
+#include <wlr/util/box.h>
 }
 
 #undef static
 
-#include <xkbcommon/xkbcommon.h>
-
-#include <nlohmann/json.hpp>
-
 extern class EshyWMServer* Server;
+
+enum EshyWMSceneLayer
+{
+	L_Background,
+	L_Bottom,
+	L_Tile,
+	L_Float,
+	L_Top,
+	L_Overlay,
+	L_NUM_LAYERS
+};
 
 enum EshyWMCursorMode
 {
@@ -52,61 +35,65 @@ enum EshyWMCursorMode
 	ESHYWM_CURSOR_RESIZE,
 };
 
+extern void SharedMemoryUpdated(const std::string& CurrentShm);
+
 class EshyWMServer
 {
 public:
 
-	EshyWMServer()
-		: b_window_modifier_key_pressed(false)
-		, b_window_switch_key_pressed(false)
-		, next_window_index(0)
-	{}
+	EshyWMServer();
 
-	struct wl_display* wl_display;
-	struct wlr_backend* backend;
-	struct wlr_renderer* renderer;
-	struct wlr_allocator* allocator;
-	struct wlr_scene* scene;
+	struct wl_display* WlDisplay;
+	struct wlr_backend* Backend;
+	struct wlr_renderer* Renderer;
+	struct wlr_allocator* Allocator;
+	struct wlr_scene* Scene;
+	struct wlr_scene_output_layout* SceneLayout;
+	struct wlr_xwayland* XWayland;
 
-	struct wlr_xdg_shell* xdg_shell;
-	struct wl_listener new_xdg_surface;
-	std::vector<class EshyWMWindow*> window_list;
+	struct wlr_xdg_shell* XdgShell;
+	struct wlr_layer_shell* LayerShell;
+	struct wl_listener NewXdgSurfaceListener;
+	struct wl_listener NewXWaylandSurfaceListener;
+	struct wl_listener XWaylandReadyListener;
+	std::vector<class EshyWMWindowBase*> WindowList;
 
-	struct wlr_cursor* cursor;
-	struct wlr_xcursor_manager* cursor_mgr;
+	struct wlr_cursor* Cursor;
+	struct wlr_xcursor_manager* CursorMgr;
 	struct wl_listener cursor_motion;
 	struct wl_listener cursor_motion_absolute;
 	struct wl_listener cursor_button;
 	struct wl_listener cursor_axis;
 	struct wl_listener cursor_frame;
+	enum EshyWMCursorMode CursorMode;
 
-	struct wlr_seat* seat;
+	struct wlr_seat* Seat;
 	struct wl_listener new_input;
 	struct wl_listener request_cursor;
 	struct wl_listener request_set_selection;
-	std::vector<class EshyWMKeyboard*> keyboard_list;
-	enum EshyWMCursorMode cursor_mode;
-	class EshyWMWindow* focused_window;
+	std::vector<class EshyWMKeyboard*> KeyboardList;
+
+	class EshyWMWindowBase* FocusedWindow;
 	double grab_x;
 	double grab_y;
-	struct wlr_box grab_geobox;
-	uint32_t resize_edges;
-	bool b_window_modifier_key_pressed;
-	bool b_window_switch_key_pressed;
-	uint next_window_index;
+	struct wlr_box GrabGeobox;
+	uint32_t ResizeEdges;
+	bool bWindowModifierKeyPressed;
+	uint NextWindowIndex;
 
-	struct wlr_output_layout* output_layout;
-	struct wl_listener output_change;
-	std::vector<class EshyWMOutput*> output_list;
-	struct wl_listener new_output;
+	struct wlr_scene_tree* Layers[L_NUM_LAYERS];
+
+	struct wlr_output_layout* OutputLayout;
+	struct wl_listener NewOutput;
+	struct wl_listener OutputChange;
+	std::vector<class EshyWMOutput*> OutputList;
 
 	class EshyWMSpecialWindow* Eshybar;
 
-    void Initialize();
-    void BeginEventLoop(char* startup_cmd);
+    void BeginEventLoop();
     void Shutdown();
 
-	void CloseWindow(EshyWMWindow* window);
+	void CloseWindow(EshyWMWindowBase* window);
 
     void ResetCursorMode();
 };

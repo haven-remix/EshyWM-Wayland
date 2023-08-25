@@ -2,61 +2,71 @@
 #include "Keyboard.h"
 #include "Server.h"
 #include "Window.h"
+#include "Config.h"
+
+#define static
+
+extern "C"
+{
+#include <wlr/types/wlr_keyboard.h>
+#include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_xdg_shell.h>
+}
+
+#undef static
+
+#include <iostream>
 
 void KeyboardHandleModifiers(struct wl_listener* listener, void* data)
 {
 	const EshyWMKeyboard* keyboard = wl_container_of(listener, keyboard, ModifiersListener);
 
-	wlr_seat_set_keyboard(Server->seat, keyboard->WlrKeyboard);
-	wlr_seat_keyboard_notify_modifiers(Server->seat, &keyboard->WlrKeyboard->modifiers);
+	wlr_seat_set_keyboard(Server->Seat, keyboard->WlrKeyboard);
+	wlr_seat_keyboard_notify_modifiers(Server->Seat, &keyboard->WlrKeyboard->modifiers);
 
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->WlrKeyboard);
 
 	//Window modifier
-	Server->b_window_modifier_key_pressed = modifiers & WLR_MODIFIER_LOGO ? Server->b_window_modifier_key_pressed : false;
+	Server->bWindowModifierKeyPressed = modifiers & WLR_MODIFIER_LOGO ? Server->bWindowModifierKeyPressed : false;
 
-	if(!Server->b_window_modifier_key_pressed)
+	if(!Server->bWindowModifierKeyPressed)
 		Server->ResetCursorMode();
 }
 
 bool HandleKeybinding(xkb_keysym_t sym)
 {
 	//This function assumes super is held down
-	switch (sym)
+	if (sym == XKB_KEY_Escape)
 	{
-	case XKB_KEY_Escape:
-		wl_display_terminate(Server->wl_display);
-		break;
-	case XKB_KEY_h:
-	{
-		if (Server->focused_window)
-			Server->focused_window->ToggleMinimize();
-		break;
+		wl_display_terminate(Server->WlDisplay);
 	}
-	case XKB_KEY_j:
+	else if (sym == EshyWMConfig::ESHYWM_BINDING_MINIMIZE)
 	{
-		if (Server->focused_window)
-			Server->focused_window->ToggleMaximize();
-		break;
+		if (Server->FocusedWindow)
+			Server->FocusedWindow->ToggleMinimize();
 	}
-	case XKB_KEY_k:
+	else if (sym == EshyWMConfig::ESHYWM_BINDING_MAXIMIZE)
 	{
-		if (Server->focused_window)
-			Server->focused_window->ToggleFullscreen();
-		break;
+		if (Server->FocusedWindow)
+			Server->FocusedWindow->ToggleMaximize();
 	}
-	case XKB_KEY_n:
+	else if (sym == EshyWMConfig::ESHYWM_BINDING_FULLSCREEN)
 	{
-		if (Server->focused_window)
-			Server->CloseWindow(Server->focused_window);
-		break;
+		if (Server->FocusedWindow)
+			Server->FocusedWindow->ToggleFullscreen();
 	}
-	case XKB_KEY_r:
-		system("wofi --show drun --fork --allow-images");
-		break;
-	default:
+	else if (sym == EshyWMConfig::ESHYWM_BINDING_CLOSE_WINDOW)
+	{
+		if (Server->FocusedWindow)
+			Server->CloseWindow(Server->FocusedWindow);
+	}
+	else if (EshyWMConfig::GetKeyboundCommands().find(sym) != EshyWMConfig::GetKeyboundCommands().end())
+	{
+		system(EshyWMConfig::GetKeyboundCommands()[sym].c_str());
+	}
+	else
 		return false;
-	}
+
 	return true;
 }
 
@@ -64,7 +74,7 @@ void KeyboardHandleKey(struct wl_listener* listener, void* data)
 {
 	const EshyWMKeyboard* keyboard = wl_container_of(listener, keyboard, KeyListener);
 	const struct wlr_keyboard_key_event* event = (wlr_keyboard_key_event* )data;
-	struct wlr_seat* seat = Server->seat;
+	struct wlr_seat* seat = Server->Seat;
 
 	//Translate libinput keycode -> xkbcommon
 	uint32_t keycode = event->keycode + 8;
@@ -83,13 +93,13 @@ void KeyboardHandleKey(struct wl_listener* listener, void* data)
 		for (int i = 0; i < nsyms; i++)
 			if (syms[i] == XKB_KEY_Control_L && event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
 			{
-				Server->b_window_modifier_key_pressed = true;
+				Server->bWindowModifierKeyPressed = true;
 				handled = true;
 				break;
 			}
 			else if (syms[i] == XKB_KEY_Control_L && event->state == WL_KEYBOARD_KEY_STATE_RELEASED)
 			{
-				Server->b_window_modifier_key_pressed = false;
+				Server->bWindowModifierKeyPressed = false;
 				handled = true;
 				break;
 			}
@@ -100,9 +110,9 @@ void KeyboardHandleKey(struct wl_listener* listener, void* data)
 		for (int i = 0; i < nsyms; i++)
 			if (syms[i] == XKB_KEY_Tab)
 			{				
-				Server->next_window_index++;
-				if (Server->next_window_index > Server->window_list.size() - 1)
-					Server->next_window_index = 0;
+				Server->NextWindowIndex++;
+				if (Server->NextWindowIndex > Server->WindowList.size() - 1)
+					Server->NextWindowIndex = 0;
 
 				handled = true;
 				break;
@@ -113,9 +123,9 @@ void KeyboardHandleKey(struct wl_listener* listener, void* data)
 		for (int i = 0; i < nsyms; i++)
 			if (syms[i] == XKB_KEY_Alt_L)
 			{				
-				EshyWMWindow* next_window = Server->window_list[Server->next_window_index];
-				next_window->FocusWindow(next_window->XdgToplevel->base->surface);
-				Server->next_window_index = 0;
+				EshyWMWindowBase* next_window = Server->WindowList[Server->NextWindowIndex];
+				next_window->FocusWindow();
+				Server->NextWindowIndex = 0;
 				handled = true;
 				break;
 			}

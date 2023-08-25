@@ -2,40 +2,38 @@
 #include "EshyWM.h"
 #include "Server.h"
 #include "Window.h"
+#include "Config.h"
 #include "Util.h"
 
 #include "EshyIPC.h"
 
-#include <wayland-client-core.h>
+extern "C" {
+#include <wlr/util/log.h>
+}
 
 #include <nlohmann/json.hpp>
 
+#include <fstream>
+
 int EshybarShmID;
 
-static char* DetermineStartupCommand(int argc, char* argv[])
+static std::ofstream LogFile;
+
+static void Callback(enum wlr_log_importance importance, const char *fmt, va_list args)
 {
-	char* StartupCmd = nullptr;
-
-	int c;
-	while ((c = getopt(argc, argv, "s:h")) != -1)
-	{
-		switch (c)
-		{
-		case 's':
-			StartupCmd = optarg;
-			break;
-		default:
-			printf("Usage: %s [-s startup command]\n", argv[0]);
-			return 0;
-		}
-	}
-
-	return StartupCmd;
+	char* log = (char*)malloc(10000 * sizeof(char));
+	vsprintf(log, fmt, args);
+	LogFile << log << "\n";
+	free(log);
 }
 
 int main(int argc, char* argv[])
 {
-	wlr_log_init(WLR_SILENT, NULL);
+	LogFile.open("eshywmlogfile.txt");
+	wlr_log_init(WLR_INFO, Callback);
+
+	EshyWMConfig::InitializeKeys();
+	EshyWMConfig::ReadConfigFromFile("/home/eshy/eshywm/eshywm.conf");
 	
 	//Make shared memory for communication with Eshybar
 	EshybarShmID = EshyIPC::MakeSharedMemoryBlock("eshybarshm", 4096);
@@ -43,10 +41,10 @@ int main(int argc, char* argv[])
 	EshyIPC::InsertIntoMemory(EshybarShmID, "");
 
 	Server = new EshyWMServer;
-	Server->Initialize();
-	Server->BeginEventLoop(DetermineStartupCommand(argc, argv));
+	Server->BeginEventLoop();
 	Server->Shutdown();
-	
+
 	EshyIPC::DetachSharedMemoryBlock(EshybarShmID);
+	LogFile.close();
 	return 0;
 }

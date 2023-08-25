@@ -79,7 +79,7 @@ void euiRenderer::UpdateWindowSize(float Width, float Height)
 {
 	WindowWidth = Width;
 	WindowHeight = Height;
-	ProjectionMatrix = glm::ortho(0.0f, 1024.0f, 0.0f, Height, -1.0f, 1.0f);
+	ProjectionMatrix = glm::ortho(0.0f, Width, 0.0f, Height, -1.0f, 1.0f);
 	glfwSetWindowSize(Window, (int)Width, (int)Height);
 }
 

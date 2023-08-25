@@ -7,10 +7,7 @@ class EshyWMSpecialWindow
 {
 public:
 
-    EshyWMSpecialWindow() {}
-
+    EshyWMSpecialWindow(struct wlr_xdg_surface* xdg_surface);
     struct wlr_xdg_toplevel* XdgToplevel;
 	struct wlr_scene_tree* SceneTree;
-
-    void Initialize(struct wlr_xdg_surface* xdg_surface);
 };
